@@ -1,4 +1,8 @@
 import os
+# Django setup
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "quiz_project.settings")
+import django
+django.setup()
 import re
 import requests
 from urllib.parse import urlencode
@@ -15,10 +19,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = os.getenv("API_URL").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "telegram-webhook")
 
-# Django setup
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "quiz_project.settings")
-import django
-django.setup()
+
 
 from quiz_app.models import Quiz, QuizParticipant, QuizScore
 

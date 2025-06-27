@@ -7,6 +7,7 @@ from telegram import Update
 
 @csrf_exempt
 def telegram_webhook(request):
+    print("📩 Telegram update received")
     if request.method == "POST":
         update = Update.de_json(request.body.decode("utf-8"), telegram_app.bot)
         telegram_app.update_queue.put(update)
