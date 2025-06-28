@@ -3,7 +3,9 @@ from .utils import get_questions_from_sheet
 from .models import Quiz
 from django.views.decorators.csrf import csrf_exempt
 from bot import telegram_app
+print("📦 bot.py has been imported")
 from telegram import Update
+import json
 import logging
 from asgiref.sync import async_to_sync
 
@@ -13,20 +15,21 @@ def telegram_webhook(request):
     print("📩 Telegram update received")
     if request.method == "POST":
         try:
-            body = request.body.decode("utf-8")
-            logger.warning("📩 Telegram update received: %s", body)
+            body_raw = request.body.decode("utf-8")
+            data = json.loads(body_raw)
+            update = Update.de_json(data, telegram_app.bot)
 
-            update = Update.de_json(body, telegram_app.bot)
-
-            # ✅ Safely run async handler in sync view
-            async_to_sync(telegram_app.process_update)(update)
+            # ✅ Schedule update to PTB's own event loop
+            telegram_app.create_task(telegram_app.process_update(update))
 
             return HttpResponse("OK")
-        except Exception as e:
-            logger.exception("❌ Error handling Telegram webhook")
+
+        except Exception:
+            import traceback
+            print("❌ Error handling Telegram webhook:")
+            print(traceback.format_exc())
             return HttpResponse("Error", status=500)
     return HttpResponse("OK")
-
 
 def quiz_questions_api(request):
     quiz_name = request.GET.get("quiz")

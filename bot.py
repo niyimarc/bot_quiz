@@ -12,6 +12,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, Comma
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.conf import settings
+import asyncio
+from asyncio import get_event_loop
 
 # Load env variables
 load_dotenv()
@@ -25,7 +27,7 @@ from quiz_app.models import Quiz, QuizParticipant, QuizScore
 
 # --- Markdown escape
 def escape_markdown(text):
-    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', text)
+    return re.sub(r'([_\*\[\]()~`>#+=|{}.!\\-])', r'\\\1', text)
 
 # --- API Call
 def fetch_questions_from_api(quiz_name):
@@ -99,17 +101,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("✅ /start command received")
     user = update.effective_user.first_name or "there"
     intro_text = (
-        f"👋 Hello {escape_markdown(user)}!\n\n"
-        "Welcome to the *Quiz Bot*! 🧠\n\n"
-        "Here's how it works:\n"
-        "1. Select a quiz from the list.\n"
-        "2. Answer each question one-by-one.\n"
-        "3. Get instant feedback.\n"
-        "4. Score saved at the end.\n\n"
-        "Use /continue to resume unfinished quizzes.\n"
-        "💬 Developer: @drey_tech\n\n"
-        "👇 Choose a quiz:"
-    )
+         f"""👋 Hello {user}!\n
+        <b>Welcome to the Quiz Bot 🧠</b>\n\n
+        Here's how it works:\n
+        1. Select a quiz from the list.\n
+        2. Answer each question one-by-one.\n
+        3. Get instant feedback.\n
+        4. Score saved at the end.\n\n
+        Use <code>/continue</code> to resume unfinished quizzes.\n
+        💬 Developer: <a href="https://t.me/drey_tech">@drey_tech</a>\n\n
+        👇 Choose a quiz:"""
+        )
     quizzes = await get_quiz_names()
     if not quizzes:
         await update.message.reply_text("⚠️ No active quizzes available.")
@@ -117,7 +119,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [[KeyboardButton(name)] for name in quizzes]
     markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(intro_text, reply_markup=markup, parse_mode="MarkdownV2")
+    await update.message.reply_text(intro_text, reply_markup=markup, parse_mode="HTML")
 
 async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -221,9 +223,9 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if selected == correct:
         session["score"] += 1
-        await update.message.reply_text(f"✅ Correct!\n\n{summary}\n\nYour Answer: {selected}", parse_mode="MarkdownV2")
+        await update.message.reply_text(f"✅ Correct!\n\n{summary}\n\nYour Answer: {selected}", parse_mode="HTML")
     else:
-        await update.message.reply_text(f"❌ Incorrect.\n\n{summary}\n\nYour Answer: {selected}\nCorrect Answer: {correct}", parse_mode="MarkdownV2")
+        await update.message.reply_text(f"❌ Incorrect.\n\n{summary}\n\nYour Answer: {selected}\nCorrect Answer: {correct}", parse_mode="HTML")
 
     score_obj = await get_score_by_id(session["score_obj_id"])
     await update_score(score_obj, session["score"])
@@ -235,6 +237,28 @@ application = ApplicationBuilder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("continue", continue_quiz))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+import threading
+def run_bot_loop():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(application.initialize())
+    application._running = True
+    loop.run_forever()
+
+def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def setup():
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+
+    loop.run_until_complete(setup())
+    loop.run_forever()
+
+threading.Thread(target=run_bot, daemon=True).start()
 
 # This is for Django view to access
 telegram_app = application
