@@ -84,8 +84,12 @@ def update_score(score_obj, new_score, ended=False):
     score_obj.save()
 
 @sync_to_async
-def get_or_create_session(participant):
-    return QuizSession.objects.get_or_create(participant=participant)
+def get_or_create_session(participant, quiz):
+    return QuizSession.objects.get_or_create(
+        participant=participant,
+        quiz=quiz,
+        defaults={"score": 0, "index": 0}
+    )
 
 @sync_to_async
 def update_session(session, **kwargs):
