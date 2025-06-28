@@ -6,6 +6,7 @@ from bot import telegram_app
 print("bot.py has been imported")
 from telegram import Update
 import json
+import traceback
 import logging
 from asgiref.sync import async_to_sync
 import asyncio
@@ -19,20 +20,12 @@ def telegram_webhook(request):
             data = json.loads(request.body.decode("utf-8"))
             update = Update.de_json(data, telegram_app.bot)
 
-            async def process():
-                if not telegram_app._initialized:
-                    await telegram_app.initialize()
-                await telegram_app.process_update(update)
-
-            # Always create and run a fresh loop to avoid "event loop is closed" or "bound to another thread" errors
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(process())
-            loop.close()
+            # This uses the internal asyncio loop from telegram_app
+            # Instead of creating a new loop
+            telegram_app.create_task(telegram_app.process_update(update))
 
             return HttpResponse("OK")
         except Exception:
-            import traceback
             print("Error handling Telegram webhook:")
             print(traceback.format_exc())
             return HttpResponse("Error", status=500)
