@@ -269,10 +269,20 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, session, participant):
+    questions = session.questions or []
+    if session.index >= len(questions):
+        # All questions answered, finish quiz
+        score_obj_id = await get_score_obj_id_from_session(session)
+        score_obj = await get_score_by_id(score_obj_id)
+        await update_score(score_obj, session.score, ended=True)
+        await update.message.reply_text(f"🎉 Finished! You scored {session.score} out of {len(questions)}")
+        await update_session(session, quiz_name=None, questions=[], index=0, score=0, score_obj=None)
+        return
+
     selected = update.message.text.strip()[0].upper()
     correct = context.user_data.get("correct")
 
-    question = session.questions[session.index]
+    question = questions[session.index]
     summary = f"*Q{question['number']}*: {escape_markdown(question['text'])}\n" + \
               "\n".join(escape_markdown(opt) for opt in question["options"])
 
