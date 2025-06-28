@@ -18,6 +18,7 @@ from asyncio import get_event_loop
 # Load env variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 API_URL = os.getenv("API_URL").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "telegram-webhook")
 
@@ -238,27 +239,27 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("continue", continue_quiz))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-import threading
-def run_bot_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(application.initialize())
-    application._running = True
-    loop.run_forever()
+# import threading
+# def run_bot_loop():
+#     loop = asyncio.new_event_loop()
+#     asyncio.set_event_loop(loop)
+#     loop.run_until_complete(application.initialize())
+#     application._running = True
+#     loop.run_forever()
 
-def run_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# def run_bot():
+#     loop = asyncio.new_event_loop()
+#     asyncio.set_event_loop(loop)
 
-    async def setup():
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
+#     async def setup():
+#         await application.initialize()
+#         await application.start()
+#         await application.updater.start_polling()
 
-    loop.run_until_complete(setup())
-    loop.run_forever()
+#     loop.run_until_complete(setup())
+#     loop.run_forever()
 
-threading.Thread(target=run_bot, daemon=True).start()
+# threading.Thread(target=run_bot, daemon=True).start()
 
 # This is for Django view to access
 telegram_app = application

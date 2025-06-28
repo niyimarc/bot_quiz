@@ -8,6 +8,7 @@ from telegram import Update
 import json
 import logging
 from asgiref.sync import async_to_sync
+import asyncio
 
 logger = logging.getLogger(__name__)
 @csrf_exempt
@@ -15,19 +16,18 @@ def telegram_webhook(request):
     print("Telegram update received")
     if request.method == "POST":
         try:
-            import json
-            from telegram import Update
-            from asgiref.sync import async_to_sync
-
-            body_raw = request.body.decode("utf-8")
-            data = json.loads(body_raw)
+            data = json.loads(request.body.decode("utf-8"))
             update = Update.de_json(data, telegram_app.bot)
 
-            if not telegram_app._initialized:
-                async_to_sync(telegram_app.initialize)()
+            async def process():
+                if not telegram_app._initialized:
+                    await telegram_app.initialize()
+                await telegram_app.process_update(update)
 
-            # ✅ Correct for sync context
-            async_to_sync(telegram_app.process_update)(update)
+            # ✅ Create a new event loop in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(process())
 
             return HttpResponse("OK")
 
@@ -36,6 +36,7 @@ def telegram_webhook(request):
             print("Error handling Telegram webhook:")
             print(traceback.format_exc())
             return HttpResponse("Error", status=500)
+
     return HttpResponse("OK")
 
 def quiz_questions_api(request):
