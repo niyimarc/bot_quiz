@@ -20,9 +20,13 @@ def telegram_webhook(request):
             data = json.loads(request.body.decode("utf-8"))
             update = Update.de_json(data, telegram_app.bot)
 
-            # This uses the internal asyncio loop from telegram_app
-            # Instead of creating a new loop
-            telegram_app.create_task(telegram_app.process_update(update))
+            async def process():
+                if not telegram_app._initialized:
+                    await telegram_app.initialize()
+                await telegram_app.process_update(update)
+
+            # ✅ This safely runs the coroutine once per request
+            asyncio.run(process())
 
             return HttpResponse("OK")
         except Exception:
