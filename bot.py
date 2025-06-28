@@ -11,7 +11,6 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 from asgiref.sync import sync_to_async
 from django.utils import timezone
-from django.conf import settings
 
 from quiz_app.models import Quiz, QuizParticipant, QuizScore, QuizSession
 
@@ -119,6 +118,28 @@ def update_session(session, **kwargs):
         setattr(session, key, value)
     session.save()
 
+# --- Helper functions for related field access ---
+@sync_to_async
+def get_quiz_name_from_score(score):
+    return score.quiz.name
+
+@sync_to_async
+def get_quiz_from_score(score):
+    return score.quiz
+
+@sync_to_async
+def get_quiz_name_from_session(session):
+    # Session has foreign key to Quiz via 'quiz' field
+    return session.quiz.name
+
+@sync_to_async
+def get_score_obj_id_from_session(session):
+    return session.score_obj.id
+
+@sync_to_async
+def get_quiz_from_name(quiz_name):
+    return Quiz.objects.filter(name=quiz_name, is_active=True).first()
+
 
 # --- Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,21 +182,24 @@ async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎉 You have no unfinished quiz.")
         return
 
-    questions = fetch_questions_from_api(unfinished.quiz.name)
+    quiz_name = await get_quiz_name_from_score(unfinished)
+    questions = fetch_questions_from_api(quiz_name)
     if not questions:
         await update.message.reply_text("❌ Could not load quiz questions.")
         return
 
-    session, _ = await get_or_create_session(participant, unfinished.quiz, unfinished, questions=questions)
+    quiz = await get_quiz_from_score(unfinished)
+    session, _ = await get_or_create_session(participant, quiz, unfinished, questions=questions)
+
     await update_session(session,
-        quiz_name=unfinished.quiz.name,
+        quiz_name=quiz_name,
         questions=questions,
         index=unfinished.score,
         score=unfinished.score,
         score_obj=unfinished,
     )
 
-    await update.message.reply_text(f"🔁 Resuming quiz: {unfinished.quiz.name}")
+    await update.message.reply_text(f"🔁 Resuming quiz: {quiz_name}")
     await send_question(update, context)
 
 
@@ -188,10 +212,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = await get_active_session(participant)
 
-    if session and session.quiz and session.quiz.name:
-        await handle_answer(update, context, session, participant)
-    else:
-        await select_quiz(update, context, participant, session)
+    if session:
+        quiz_name = await get_quiz_name_from_session(session)
+        if quiz_name:
+            await handle_answer(update, context, session, participant)
+            return
+
+    await select_quiz(update, context, participant, session)
 
 
 async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, participant, session):
@@ -226,7 +253,8 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     index = session.index
 
     if index >= len(questions):
-        score_obj = await get_score_by_id(session.score_obj.id)
+        score_obj_id = await get_score_obj_id_from_session(session)
+        score_obj = await get_score_by_id(score_obj_id)
         await update_score(score_obj, session.score, ended=True)
         await update.message.reply_text(f"🎉 Finished! You scored {session.score} out of {len(questions)}")
         await update_session(session, quiz_name=None, questions=[], index=0, score=0, score_obj=None)
@@ -258,7 +286,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, sess
             parse_mode="HTML"
         )
 
-    score_obj = await get_score_by_id(session.score_obj.id)
+    score_obj_id = await get_score_obj_id_from_session(session)
+    score_obj = await get_score_by_id(score_obj_id)
     await update_score(score_obj, new_score)
     await update_session(session, score=new_score, index=session.index + 1)
     await send_question(update, context)
