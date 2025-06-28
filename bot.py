@@ -183,13 +183,20 @@ async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, partic
         return
 
     score_obj = await create_score(participant, quiz, len(questions))
-    await update_session(session,
-        quiz_name=quiz_name,
-        questions=questions,
-        index=0,
-        score=0,
-        score_obj=score_obj,
-    )
+    if session:
+        await update_session(session,
+            quiz=quiz,
+            index=0,
+            score=0,
+            score_obj=score_obj,
+        )
+    else:
+        session, _ = await get_or_create_session(participant, quiz)
+        await update_session(session,
+            index=0,
+            score=0,
+            score_obj=score_obj,
+        )
 
     await update.message.reply_text(f"🧠 Starting quiz: {quiz_name}")
     await send_question(update, context)
