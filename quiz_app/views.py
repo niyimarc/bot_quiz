@@ -5,7 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from bot import telegram_app
 from telegram import Update
 import logging
-import asyncio
+from asgiref.sync import async_to_sync
 
 logger = logging.getLogger(__name__)
 @csrf_exempt
@@ -17,9 +17,9 @@ def telegram_webhook(request):
             logger.warning("📩 Telegram update received: %s", body)
 
             update = Update.de_json(body, telegram_app.bot)
-            
-            # Use async event loop to handle the update
-            asyncio.get_event_loop().create_task(telegram_app.process_update(update))
+
+            # ✅ Safely run async handler in sync view
+            async_to_sync(telegram_app.process_update)(update)
 
             return HttpResponse("OK")
         except Exception as e:
