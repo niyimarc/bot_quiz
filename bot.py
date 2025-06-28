@@ -98,7 +98,7 @@ user_sessions = {}
 
 # --- Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("✅ /start command received")
+    print("/start command received")
     user = update.effective_user.first_name or "there"
     intro_text = (
          f"""👋 Hello {user}!\n

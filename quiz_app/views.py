@@ -3,7 +3,7 @@ from .utils import get_questions_from_sheet
 from .models import Quiz
 from django.views.decorators.csrf import csrf_exempt
 from bot import telegram_app
-print("📦 bot.py has been imported")
+print("bot.py has been imported")
 from telegram import Update
 import json
 import logging
@@ -12,7 +12,7 @@ from asgiref.sync import async_to_sync
 logger = logging.getLogger(__name__)
 @csrf_exempt
 def telegram_webhook(request):
-    print("📩 Telegram update received")
+    print("Telegram update received")
     if request.method == "POST":
         try:
             body_raw = request.body.decode("utf-8")
@@ -26,7 +26,7 @@ def telegram_webhook(request):
 
         except Exception:
             import traceback
-            print("❌ Error handling Telegram webhook:")
+            print("Error handling Telegram webhook:")
             print(traceback.format_exc())
             return HttpResponse("Error", status=500)
     return HttpResponse("OK")
