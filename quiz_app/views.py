@@ -4,13 +4,21 @@ from .models import Quiz
 from django.views.decorators.csrf import csrf_exempt
 from bot import telegram_app
 from telegram import Update
+import logging
 
+logger = logging.getLogger(__name__)
 @csrf_exempt
 def telegram_webhook(request):
     print("📩 Telegram update received")
     if request.method == "POST":
-        update = Update.de_json(request.body.decode("utf-8"), telegram_app.bot)
-        telegram_app.update_queue.put(update)
+        try:
+            body = request.body.decode("utf-8")
+            logger.warning("📩 Telegram update received: %s", body)
+            update = Update.de_json(body, telegram_app.bot)
+            telegram_app.update_queue.put(update)
+        except Exception as e:
+            logger.exception("❌ Error handling Telegram webhook")
+            return HttpResponse("Error", status=500)
     return HttpResponse("OK")
 
 

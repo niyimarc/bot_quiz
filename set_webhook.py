@@ -12,5 +12,11 @@ async def main():
     success = await bot.set_webhook(WEBHOOK_URL)
     print("Webhook set:", success)
 
+# async def clear_webhook():
+#     bot = Bot(token=BOT_TOKEN)
+#     await bot.delete_webhook(drop_pending_updates=True)
+#     await bot.set_webhook(WEBHOOK_URL)
+
+
 if __name__ == "__main__":
     asyncio.run(main())
