@@ -142,7 +142,7 @@ async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not load quiz questions.")
         return
 
-    session, _ = await get_or_create_session(participant)
+    session, _ = await get_or_create_session(participant, unfinished.quiz)
     await update_session(session,
         quiz_name=unfinished.quiz.name,
         questions=questions,
@@ -161,9 +161,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗ Please start a quiz first using /start.")
         return
 
-    session, _ = await get_or_create_session(participant)
+    # Try to fetch existing session instead of creating
+    session = await QuizSession.objects.filter(participant=participant, active=True).afirst()
+    
 
-    if session.quiz_name:
+    if session and session.quiz_name:
         await handle_answer(update, context, session, participant)
     else:
         await select_quiz(update, context, participant, session)
@@ -195,7 +197,11 @@ async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, partic
 async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     participant = await get_participant_by_telegram_id(user_id)
-    session, _ = await get_or_create_session(participant)
+
+    session = await QuizSession.objects.filter(participant=participant, active=True).afirst()
+    if not session:
+        await update.message.reply_text("❗ No active session found.")
+        return
 
     questions = session.questions or []
     index = session.index
