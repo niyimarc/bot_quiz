@@ -24,10 +24,8 @@ def telegram_webhook(request):
                     await telegram_app.initialize()
                 await telegram_app.process_update(update)
 
-            # ✅ Create a new event loop in this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(process())
+            # ✅ Use asyncio.run to ensure one clean event loop
+            asyncio.run(process())
 
             return HttpResponse("OK")
 
@@ -38,7 +36,6 @@ def telegram_webhook(request):
             return HttpResponse("Error", status=500)
 
     return HttpResponse("OK")
-
 def quiz_questions_api(request):
     quiz_name = request.GET.get("quiz")
     if not quiz_name:
