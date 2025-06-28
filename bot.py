@@ -96,10 +96,12 @@ def update_session(session, **kwargs):
 # --- Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("/start command received")
-    user = update.effective_user.first_name or "there"
+    user = update.effective_user
     await get_or_create_participant(user)
+
+    name = user.first_name or "there"
     intro_text = (
-         f"""👋 Hello {user}!\n
+         f"""👋 Hello {name}!\n
         <b>Welcome to the Quiz Bot 🧠</b>\n\n
         Here's how it works:\n
         1. Select a quiz from the list.\n
