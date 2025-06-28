@@ -24,20 +24,13 @@ def telegram_webhook(request):
                     await telegram_app.initialize()
                 await telegram_app.process_update(update)
 
-            try:
-                loop = asyncio.get_event_loop_policy().get_event_loop()
-            except RuntimeError:
-                # No current loop
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            if loop.is_running():
-                asyncio.ensure_future(process())
-            else:
-                loop.run_until_complete(process())
+            # Always create and run a fresh loop to avoid "event loop is closed" or "bound to another thread" errors
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(process())
+            loop.close()
 
             return HttpResponse("OK")
-
         except Exception:
             import traceback
             print("Error handling Telegram webhook:")

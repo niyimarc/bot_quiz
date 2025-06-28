@@ -33,3 +33,10 @@ class QuizScore(models.Model):
     def __str__(self):
         return f"{self.participant} - {self.quiz.name} - {self.score}/{self.total_questions} at {self.attempt_time.strftime('%Y-%m-%d %H:%M')}"
 
+class QuizSession(models.Model):
+    participant = models.ForeignKey(QuizParticipant, on_delete=models.CASCADE)
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE)
+    score_obj = models.ForeignKey(QuizScore, on_delete=models.CASCADE)
+    index = models.IntegerField(default=0)
+    score = models.IntegerField(default=0)
+    active = models.BooleanField(default=True)

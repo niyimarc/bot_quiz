@@ -1,8 +1,8 @@
 import os
-# Django setup
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "quiz_project.settings")
 import django
 django.setup()
+
 import re
 import requests
 from urllib.parse import urlencode
@@ -12,19 +12,12 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, Comma
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.conf import settings
-import asyncio
-from asyncio import get_event_loop
 
-# Load env variables
+from quiz_app.models import Quiz, QuizParticipant, QuizScore, QuizSession  # 👈 Make sure QuizSession is added
+
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 API_URL = os.getenv("API_URL").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "telegram-webhook")
-
-
-
-from quiz_app.models import Quiz, QuizParticipant, QuizScore
 
 # --- Markdown escape
 def escape_markdown(text):
@@ -80,10 +73,6 @@ def create_score(participant, quiz, total):
     )
 
 @sync_to_async
-def get_quiz_name_from_score(score):
-    return score.quiz.name
-
-@sync_to_async
 def get_score_by_id(score_id):
     return QuizScore.objects.get(id=score_id)
 
@@ -94,8 +83,15 @@ def update_score(score_obj, new_score, ended=False):
         score_obj.end_time = timezone.now()
     score_obj.save()
 
-# --- In-memory session
-user_sessions = {}
+@sync_to_async
+def get_or_create_session(participant):
+    return QuizSession.objects.get_or_create(participant=participant)
+
+@sync_to_async
+def update_session(session, **kwargs):
+    for key, value in kwargs.items():
+        setattr(session, key, value)
+    session.save()
 
 # --- Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         Use <code>/continue</code> to resume unfinished quizzes.\n
         💬 Developer: <a href="https://t.me/drey_tech">@drey_tech</a>\n\n
         👇 Choose a quiz:"""
-        )
+    )
     quizzes = await get_quiz_names()
     if not quizzes:
         await update.message.reply_text("⚠️ No active quizzes available.")
@@ -126,140 +122,119 @@ async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     participant = await get_participant_by_telegram_id(user_id)
     if not participant:
-        await update.message.reply_text("You haven’t started any quiz yet. Use /start to begin.")
+        await update.message.reply_text("❗ You haven’t started any quiz yet.")
         return
 
     unfinished = await get_unfinished_score(participant)
     if not unfinished:
-        await update.message.reply_text("🎉 You have no quiz in progress. Use /start.")
+        await update.message.reply_text("🎉 You have no unfinished quiz.")
         return
 
-    quiz_name = await get_quiz_name_from_score(unfinished)
-    questions = fetch_questions_from_api(quiz_name)
+    questions = fetch_questions_from_api(unfinished.quiz.name)
     if not questions:
-        await update.message.reply_text("❌ Could not reload quiz data.")
+        await update.message.reply_text("❌ Could not load quiz questions.")
         return
 
-    user_sessions[user_id] = {
-        "quiz_name": quiz_name,
-        "questions": questions,
-        "index": unfinished.score,
-        "score": unfinished.score,
-        "score_obj_id": unfinished.id
-    }
+    session, _ = await get_or_create_session(participant)
+    await update_session(session,
+        quiz_name=unfinished.quiz.name,
+        questions=questions,
+        index=unfinished.score,
+        score=unfinished.score,
+        score_obj=unfinished,
+    )
 
-    await update.message.reply_text(f"🔁 Resuming quiz: {quiz_name}")
+    await update.message.reply_text(f"🔁 Resuming quiz: {unfinished.quiz.name}")
     await send_question(update, context)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id in user_sessions:
-        await handle_answer(update, context)
-    else:
-        await select_quiz(update, context)
-
-async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    participant = await get_participant_by_telegram_id(user.id)
+    if not participant:
+        await update.message.reply_text("❗ Please start a quiz first using /start.")
+        return
+
+    session, _ = await get_or_create_session(participant)
+
+    if session.quiz_name:
+        await handle_answer(update, context, session, participant)
+    else:
+        await select_quiz(update, context, participant, session)
+
+async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, participant, session):
     quiz_name = update.message.text.strip()
     quiz = await get_quiz_by_name(quiz_name)
     if not quiz:
-        await update.message.reply_text("❌ Invalid or inactive quiz. Use /start again.")
+        await update.message.reply_text("❌ Invalid quiz name.")
         return
 
     questions = fetch_questions_from_api(quiz_name)
     if not questions:
-        await update.message.reply_text("❌ Failed to load quiz questions.")
+        await update.message.reply_text("❌ Could not load questions.")
         return
 
-    participant, _ = await get_or_create_participant(user)
     score_obj = await create_score(participant, quiz, len(questions))
-
-    user_sessions[user.id] = {
-        "quiz_name": quiz_name,
-        "questions": questions,
-        "index": 0,
-        "score": 0,
-        "score_obj_id": score_obj.id
-    }
+    await update_session(session,
+        quiz_name=quiz_name,
+        questions=questions,
+        index=0,
+        score=0,
+        score_obj=score_obj,
+    )
 
     await update.message.reply_text(f"🧠 Starting quiz: {quiz_name}")
     await send_question(update, context)
 
 async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session:
-        await update.message.reply_text("No quiz in progress. Use /start.")
+    participant = await get_participant_by_telegram_id(user_id)
+    session, _ = await get_or_create_session(participant)
+
+    questions = session.questions or []
+    index = session.index
+
+    if index >= len(questions):
+        score_obj = await get_score_by_id(session.score_obj.id)
+        await update_score(score_obj, session.score, ended=True)
+        await update.message.reply_text(f"🎉 Finished! You scored {session.score} out of {len(questions)}")
+        await update_session(session, quiz_name=None, questions=[], index=0, score=0, score_obj=None)
         return
 
-    index = session["index"]
-    if index >= len(session["questions"]):
-        score_obj = await get_score_by_id(session["score_obj_id"])
-        await update_score(score_obj, session["score"], ended=True)
-        await update.message.reply_text(f"🎉 Finished! You scored {session['score']} out of {len(session['questions'])}")
-        del user_sessions[user_id]
-        return
-
-    question = session["questions"][index]
+    question = questions[index]
     context.user_data["correct"] = question["correct"]
     keyboard = [[opt] for opt in question["options"] if opt.strip()]
     markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
-    question_text = f"Q{question['number']}. {question['text']}"
-    await update.message.reply_text(question_text, reply_markup=markup)
+    await update.message.reply_text(f"Q{question['number']}. {question['text']}", reply_markup=markup)
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session:
-        await update.message.reply_text("❗ Start a quiz first with /start.")
-        return
-
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, session, participant):
     selected = update.message.text.strip()[0].upper()
     correct = context.user_data.get("correct")
 
-    question = session["questions"][session["index"]]
+    question = session.questions[session.index]
     summary = f"*Q{question['number']}*: {escape_markdown(question['text'])}\n" + \
               "\n".join(escape_markdown(opt) for opt in question["options"])
 
     if selected == correct:
-        session["score"] += 1
-        await update.message.reply_text(f"✅ Correct!\n\n{summary}\n\nYour Answer: {selected}", parse_mode="HTML")
+        new_score = session.score + 1
+        await update.message.reply_text(f"✅ Correct!\n\n{summary}\nYour Answer: {selected}", parse_mode="HTML")
     else:
-        await update.message.reply_text(f"❌ Incorrect.\n\n{summary}\n\nYour Answer: {selected}\nCorrect Answer: {correct}", parse_mode="HTML")
+        new_score = session.score
+        await update.message.reply_text(
+            f"❌ Incorrect.\n\n{summary}\nYour Answer: {selected}\nCorrect Answer: {correct}",
+            parse_mode="HTML"
+        )
 
-    score_obj = await get_score_by_id(session["score_obj_id"])
-    await update_score(score_obj, session["score"])
-    session["index"] += 1
+    score_obj = await get_score_by_id(session.score_obj.id)
+    await update_score(score_obj, new_score)
+    await update_session(session, score=new_score, index=session.index + 1)
     await send_question(update, context)
 
-# --- Telegram App Setup (Webhook ready)
+# --- Build Application
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("continue", continue_quiz))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-# import threading
-# def run_bot_loop():
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-#     loop.run_until_complete(application.initialize())
-#     application._running = True
-#     loop.run_forever()
-
-# def run_bot():
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-
-#     async def setup():
-#         await application.initialize()
-#         await application.start()
-#         await application.updater.start_polling()
-
-#     loop.run_until_complete(setup())
-#     loop.run_forever()
-
-# threading.Thread(target=run_bot, daemon=True).start()
-
-# This is for Django view to access
+# For Django view
 telegram_app = application
