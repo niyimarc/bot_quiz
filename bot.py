@@ -13,15 +13,17 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.conf import settings
 
-from quiz_app.models import Quiz, QuizParticipant, QuizScore, QuizSession  # 👈 Make sure QuizSession is added
+from quiz_app.models import Quiz, QuizParticipant, QuizScore, QuizSession
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = os.getenv("API_URL").rstrip("/")
 
+
 # --- Markdown escape
 def escape_markdown(text):
     return re.sub(r'([_\*\[\]()~`>#+=|{}.!\\-])', r'\\\1', text)
+
 
 # --- API Call
 def fetch_questions_from_api(quiz_name):
@@ -35,7 +37,12 @@ def fetch_questions_from_api(quiz_name):
         print("Request failed:", e)
     return []
 
+
 # --- Async DB Functions
+@sync_to_async
+def get_active_session(participant):
+    return QuizSession.objects.filter(participant=participant, active=True).first()
+
 @sync_to_async
 def get_quiz_names():
     return list(Quiz.objects.filter(is_active=True).values_list("name", flat=True))
@@ -97,7 +104,6 @@ def get_or_create_session(participant, quiz, score_obj, questions=None):
         }
     )
     if not created:
-        # Update if session exists but is inactive or points to an old score
         session.score_obj = score_obj
         session.index = 0
         session.score = 0
@@ -112,6 +118,7 @@ def update_session(session, **kwargs):
     for key, value in kwargs.items():
         setattr(session, key, value)
     session.save()
+
 
 # --- Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,6 +147,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton(name)] for name in quizzes]
     markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
     await update.message.reply_text(intro_text, reply_markup=markup, parse_mode="HTML")
+
 
 async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -170,6 +178,7 @@ async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔁 Resuming quiz: {unfinished.quiz.name}")
     await send_question(update, context)
 
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     participant = await get_participant_by_telegram_id(user.id)
@@ -177,14 +186,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗ Please start a quiz first using /start.")
         return
 
-    # Try to fetch existing session instead of creating
-    session = await QuizSession.objects.filter(participant=participant, active=True).afirst()
-    
+    session = await get_active_session(participant)
 
     if session and session.quiz and session.quiz.name:
         await handle_answer(update, context, session, participant)
     else:
         await select_quiz(update, context, participant, session)
+
 
 async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, participant, session):
     quiz_name = update.message.text.strip()
@@ -200,15 +208,16 @@ async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, partic
 
     score_obj = await create_score(participant, quiz, len(questions))
     session = await get_or_create_session(participant, quiz, score_obj, questions=questions)
-    
+
     await update.message.reply_text(f"🧠 Starting quiz: {quiz_name}")
     await send_question(update, context)
+
 
 async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     participant = await get_participant_by_telegram_id(user_id)
 
-    session = await QuizSession.objects.filter(participant=participant, active=True).afirst()
+    session = await get_active_session(participant)
     if not session:
         await update.message.reply_text("❗ No active session found.")
         return
@@ -229,6 +238,7 @@ async def send_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
     await update.message.reply_text(f"Q{question['number']}. {question['text']}", reply_markup=markup)
+
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, session, participant):
     selected = update.message.text.strip()[0].upper()
@@ -252,6 +262,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, sess
     await update_score(score_obj, new_score)
     await update_session(session, score=new_score, index=session.index + 1)
     await send_question(update, context)
+
 
 # --- Build Application
 application = ApplicationBuilder().token(BOT_TOKEN).build()
