@@ -15,12 +15,19 @@ def telegram_webhook(request):
     print("Telegram update received")
     if request.method == "POST":
         try:
+            import json
+            from telegram import Update
+            from asgiref.sync import async_to_sync
+
             body_raw = request.body.decode("utf-8")
             data = json.loads(body_raw)
             update = Update.de_json(data, telegram_app.bot)
 
-            # ✅ Schedule update to PTB's own event loop
-            telegram_app.create_task(telegram_app.process_update(update))
+            if not telegram_app._initialized:
+                async_to_sync(telegram_app.initialize)()
+
+            # ✅ Correct for sync context
+            async_to_sync(telegram_app.process_update)(update)
 
             return HttpResponse("OK")
 
