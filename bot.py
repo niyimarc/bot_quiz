@@ -84,7 +84,7 @@ def update_score(score_obj, new_score, ended=False):
     score_obj.save()
 
 @sync_to_async
-def get_or_create_session(participant, quiz, score_obj):
+def get_or_create_session(participant, quiz, score_obj, questions=None):
     session, created = QuizSession.objects.get_or_create(
         participant=participant,
         quiz=quiz,
@@ -92,7 +92,8 @@ def get_or_create_session(participant, quiz, score_obj):
             "score_obj": score_obj,
             "index": 0,
             "score": 0,
-            "active": True
+            "active": True,
+            "questions": questions or []
         }
     )
     if not created:
@@ -101,6 +102,8 @@ def get_or_create_session(participant, quiz, score_obj):
         session.index = 0
         session.score = 0
         session.active = True
+        if questions:
+            session.questions = questions
         session.save()
     return session
 
@@ -155,7 +158,7 @@ async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not load quiz questions.")
         return
 
-    session, _ = await get_or_create_session(participant, unfinished.quiz, unfinished)
+    session, _ = await get_or_create_session(participant, unfinished.quiz, unfinished, questions=questions)
     await update_session(session,
         quiz_name=unfinished.quiz.name,
         questions=questions,
@@ -196,22 +199,8 @@ async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, partic
         return
 
     score_obj = await create_score(participant, quiz, len(questions))
-    session = await get_or_create_session(participant, quiz, score_obj)
-    if session:
-        await update_session(session,
-            quiz=quiz,
-            index=0,
-            score=0,
-            score_obj=score_obj,
-        )
-    else:
-        session, _ = await get_or_create_session(participant, quiz)
-        await update_session(session,
-            index=0,
-            score=0,
-            score_obj=score_obj,
-        )
-
+    session = await get_or_create_session(participant, quiz, score_obj, questions=questions)
+    
     await update.message.reply_text(f"🧠 Starting quiz: {quiz_name}")
     await send_question(update, context)
 

@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.db.models import JSONField
 
 class Quiz(models.Model):
     name = models.CharField(max_length=255, unique=True)
@@ -40,3 +41,4 @@ class QuizSession(models.Model):
     index = models.IntegerField(default=0)
     score = models.IntegerField(default=0)
     active = models.BooleanField(default=True)
+    questions = JSONField(default=list)
