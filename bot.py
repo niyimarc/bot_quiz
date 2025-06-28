@@ -181,7 +181,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = await QuizSession.objects.filter(participant=participant, active=True).afirst()
     
 
-    if session and session.quiz_name:
+    if session and session.quiz and session.quiz.name:
         await handle_answer(update, context, session, participant)
     else:
         await select_quiz(update, context, participant, session)
