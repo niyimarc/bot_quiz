@@ -84,12 +84,25 @@ def update_score(score_obj, new_score, ended=False):
     score_obj.save()
 
 @sync_to_async
-def get_or_create_session(participant, quiz):
-    return QuizSession.objects.get_or_create(
+def get_or_create_session(participant, quiz, score_obj):
+    session, created = QuizSession.objects.get_or_create(
         participant=participant,
         quiz=quiz,
-        defaults={"score": 0, "index": 0}
+        defaults={
+            "score_obj": score_obj,
+            "index": 0,
+            "score": 0,
+            "active": True
+        }
     )
+    if not created:
+        # Update if session exists but is inactive or points to an old score
+        session.score_obj = score_obj
+        session.index = 0
+        session.score = 0
+        session.active = True
+        session.save()
+    return session
 
 @sync_to_async
 def update_session(session, **kwargs):
@@ -142,7 +155,7 @@ async def continue_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not load quiz questions.")
         return
 
-    session, _ = await get_or_create_session(participant, unfinished.quiz)
+    session, _ = await get_or_create_session(participant, unfinished.quiz, unfinished)
     await update_session(session,
         quiz_name=unfinished.quiz.name,
         questions=questions,
@@ -183,6 +196,7 @@ async def select_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, partic
         return
 
     score_obj = await create_score(participant, quiz, len(questions))
+    session = await get_or_create_session(participant, quiz, score_obj)
     if session:
         await update_session(session,
             quiz=quiz,
