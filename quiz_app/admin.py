@@ -1,11 +1,11 @@
 from django.contrib import admin
-from .models import QuizParticipant, QuizScore, Quiz
+from .models import QuizParticipant, QuizScore, Quiz, QuizSession
 
 @admin.register(Quiz)
 class QuizAdmin(admin.ModelAdmin):
-    list_display = ("name", "sheet_url", "is_active")
+    list_display = ("name", "sheet_url", "is_active", "status")
     search_fields = ("name",)
-    list_filter = ("is_active",)
+    list_filter = ("is_active", "status")
 
 @admin.register(QuizParticipant)
 class QuizParticipantAdmin(admin.ModelAdmin):
@@ -22,3 +22,7 @@ class QuizScoreAdmin(admin.ModelAdmin):
     list_filter = ("start_time", "end_time")
     search_fields = ("participant__username", "participant__telegram_id")
     ordering = ("-start_time",)
+
+@admin.register(QuizSession)
+class QuizSessionAdmin(admin.ModelAdmin):
+    list_display = ("participant", "quiz", "score_obj", "index", "score", "active")

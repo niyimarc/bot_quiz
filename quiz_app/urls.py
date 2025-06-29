@@ -1,7 +1,8 @@
 from django.urls import path
-from .views import quiz_questions_api, telegram_webhook
+from .views import get_quizzes, continue_session, process_message
 
 urlpatterns = [
-    path('quiz/questions/', quiz_questions_api),
-    path("webhook/bot_webhook/", telegram_webhook, name="telegram-webhook"),
+    path('quiz/get_quizzes/', get_quizzes),
+    path("quiz/continue_session/", continue_session),
+    path("quiz/process_message/", process_message)
 ]

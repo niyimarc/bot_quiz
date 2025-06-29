@@ -1,52 +1,98 @@
-from django.http import JsonResponse, HttpResponse
-from .utils import get_questions_from_sheet
-from .models import Quiz
+# views.py
+from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from bot import telegram_app
-print("bot.py has been imported")
-from telegram import Update
+from django.utils import timezone
+from quiz_app.models import Quiz, QuizParticipant, QuizScore, QuizSession
+from quiz_app.utils import get_questions_from_sheet
 import json
-import traceback
-import logging
-from asgiref.sync import async_to_sync
-import asyncio
 
-logger = logging.getLogger(__name__)
 @csrf_exempt
-def telegram_webhook(request):
-    print("Telegram update received")
-    if request.method == "POST":
-        try:
-            data = json.loads(request.body.decode("utf-8"))
-            update = Update.de_json(data, telegram_app.bot)
+def get_quizzes(request):
+    quizzes = Quiz.objects.filter(is_active=True, status="public").values_list("name", flat=True)
+    return JsonResponse(list(quizzes), safe=False)
 
-            async def process():
-                if not telegram_app._initialized:
-                    await telegram_app.initialize()
-                await telegram_app.process_update(update)
+@csrf_exempt
+def continue_session(request):
+    telegram_id = request.GET.get("telegram_id")
+    if not telegram_id:
+        return JsonResponse({"error": "Missing telegram_id"}, status=400)
 
-            # ✅ This safely runs the coroutine once per request
-            asyncio.run(process())
-
-            return HttpResponse("OK")
-        except Exception:
-            print("Error handling Telegram webhook:")
-            print(traceback.format_exc())
-            return HttpResponse("Error", status=500)
-
-    return HttpResponse("OK")
-
-def quiz_questions_api(request):
-    quiz_name = request.GET.get("quiz")
-    if not quiz_name:
-        return JsonResponse({"error": "Missing quiz name"}, status=400)
-    
     try:
-        quiz = Quiz.objects.get(name=quiz_name, is_active=True)
-    except Quiz.DoesNotExist:
-        return JsonResponse({
-            "error": "Invalid or inactive quiz name.",
-            "available_quizzes": list(Quiz.objects.filter(is_active=True).values_list("name", flat=True))
-        }, status=400)
+        participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
+    except QuizParticipant.DoesNotExist:
+        return JsonResponse({"error": "Participant not found or inactive"}, status=404)
+
+    score = QuizScore.objects.filter(participant=participant, end_time__isnull=True).first()
+    if not score:
+        return JsonResponse({"error": "No unfinished quiz"}, status=404)
+
+    quiz = score.quiz
     questions = get_questions_from_sheet(quiz.sheet_url)
-    return JsonResponse(questions, safe=False)
+
+    session, _ = QuizSession.objects.get_or_create(
+        participant=participant,
+        quiz=quiz,
+        score_obj=score,
+        active=True,
+        defaults={"index": score.score, "score": score.score, "questions": questions},
+    )
+
+    response = {
+        "quiz_name": quiz.name,
+        "question": questions[session.index],
+    }
+    return JsonResponse(response)
+
+@csrf_exempt
+def process_message(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    telegram_id = request.POST.get("telegram_id")
+    text = request.POST.get("text")
+
+    if not telegram_id or not text:
+        return JsonResponse({"error": "Missing telegram_id or text"}, status=400)
+
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
+
+    quiz = Quiz.objects.filter(name=text, is_active=True).first()
+    if quiz:
+        if quiz.status == "private" and quiz.participant != participant:
+            return JsonResponse({"error": "This quiz is private."}, status=403)
+
+        questions = get_questions_from_sheet(quiz.sheet_url)
+        score = QuizScore.objects.create(participant=participant, quiz=quiz, total_questions=len(questions))
+        session = QuizSession.objects.create(
+            participant=participant,
+            quiz=quiz,
+            score_obj=score,
+            questions=questions,
+        )
+        return JsonResponse({"type": "question", "question": questions[0]})
+
+    session = QuizSession.objects.filter(participant=participant, active=True).first()
+    if not session:
+        return JsonResponse({"error": "No active session."}, status=404)
+
+    question = session.questions[session.index]
+    correct = question["correct"]
+    selected = text.strip().upper()[0]
+    feedback = "✅ Correct!" if selected == correct else f"❌ Incorrect. Correct: {correct}"
+
+    if selected == correct:
+        session.score += 1
+        session.score_obj.score += 1
+
+    session.index += 1
+    session.score_obj.save()
+    session.save()
+
+    if session.index >= len(session.questions):
+        session.active = False
+        session.score_obj.end_time = timezone.now()
+        session.save()
+        session.score_obj.save()
+        return JsonResponse({"type": "feedback", "feedback": feedback, "final_score": session.score, "total_questions": len(session.questions)})
+
+    return JsonResponse({"type": "feedback", "feedback": feedback, "question": session.questions[session.index]})
