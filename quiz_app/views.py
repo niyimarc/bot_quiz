@@ -65,7 +65,12 @@ def process_message(request):
                 session = QuizSession.objects.get(id=session_id, participant=participant, active=True)
             except QuizSession.DoesNotExist:
                 return JsonResponse({"error": "Session not found or already completed."})
-            
+
+            if session.index >= len(session.questions):
+                return JsonResponse({
+                    "error": "This session is already complete. Use /start to begin a new quiz."
+                })
+
             question = session.questions[session.index]
             return JsonResponse({
                 "type": "question",
@@ -74,7 +79,7 @@ def process_message(request):
                 "progress": f"Question {session.index + 1} of {len(session.questions)}"
             })
 
-        
+        # Start a new quiz
         quiz = Quiz.objects.filter(name=text, is_active=True).first()
         if quiz:
             if quiz.status == "private" and quiz.participant != participant:
@@ -95,10 +100,29 @@ def process_message(request):
                 "progress": f"Question 1 of {len(questions)}"
             })
 
+        # Continue existing session
         session = QuizSession.objects.filter(participant=participant, active=True).first()
         if not session:
             return JsonResponse({"error": "No active session."}, status=404)
 
+        # 🛡️ Out-of-bounds check
+        if session.index >= len(session.questions):
+            session.active = False
+            session.score_obj.end_time = timezone.now()
+            session.save()
+            session.score_obj.save()
+            quiz_name = session.quiz.name if session.quiz else "Quiz"
+            return JsonResponse({
+                "type": "feedback",
+                "final_message": f"🎉 You've completed the *{quiz_name}* quiz!\n\n"
+                                 f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n"
+                                 "Use /start to try a new quiz or /continue if you left one unfinished.",
+                "final_score": session.score,
+                "total_questions": len(session.questions),
+                "progress": f"Completed {session.index} of {len(session.questions)}"
+            })
+
+        # Validate and process the current question
         question = session.questions[session.index]
         correct = question["correct"]
         selected = text.strip().upper()[0]
@@ -113,9 +137,10 @@ def process_message(request):
         if text.strip() not in options:
             return JsonResponse({
                 "error": "❗ The answer you provided is not in the list of options.\n\n"
-                        "Use /continue to resume your quiz properly."
+                         "Use /continue to resume your quiz properly."
             })
 
+        # Update score
         if selected == correct:
             session.score += 1
             session.score_obj.score += 1
@@ -124,6 +149,7 @@ def process_message(request):
         session.score_obj.save()
         session.save()
 
+        # Final check after increment
         if session.index >= len(session.questions):
             session.active = False
             session.score_obj.end_time = timezone.now()
@@ -134,8 +160,8 @@ def process_message(request):
                 "type": "feedback",
                 "feedback": full_feedback,
                 "final_message": f"🎉 You've completed the *{quiz_name}* quiz!\n\n"
-                                f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n"
-                                "Use /start to try a new quiz or /continue if you left one unfinished.",
+                                 f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n"
+                                 "Use /start to try a new quiz or /continue if you left one unfinished.",
                 "final_score": session.score,
                 "total_questions": len(session.questions),
                 "progress": f"Completed {session.index} of {len(session.questions)}"
@@ -147,6 +173,7 @@ def process_message(request):
             "question": session.questions[session.index],
             "progress": f"Question {session.index + 1} of {len(session.questions)}"
         })
+
     except Exception as e:
         logger.exception("❌ CRASH in process_message")
         return JsonResponse({"error": "Internal Server Error"}, status=500)
