@@ -21,7 +21,7 @@ def get_questions_from_sheet(url):
         # print("Fetching data from Google Sheets...")
         response = requests.get(url, timeout=20)
         response.raise_for_status()
-        # print("Successfully fetched sheet.")
+        print("Successfully fetched sheet.")
     except requests.exceptions.RequestException as e:
         # print(f"Request failed: {e}")
         raise ValueError(f"❌ Failed to load questions sheet: {e}")
