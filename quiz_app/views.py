@@ -22,29 +22,26 @@ def continue_session(request):
     except QuizParticipant.DoesNotExist:
         return JsonResponse({"error": "Participant not found or inactive"}, status=404)
 
-    score = QuizScore.objects.filter(participant=participant, end_time__isnull=True).first()
-    if not score:
-        return JsonResponse({"error": "No unfinished quiz"}, status=404)
+    unfinished_scores = QuizScore.objects.filter(participant=participant, end_time__isnull=True)
+    if not unfinished_scores.exists():
+        return JsonResponse({"error": "No unfinished quizzes found."}, status=404)
 
-    quiz = score.quiz
-    questions = get_questions_from_sheet(quiz.sheet_url)
+    options = []
+    for score in unfinished_scores:
+        session = QuizSession.objects.filter(score_obj=score, participant=participant, active=True).first()
+        if session:
+            total = len(session.questions)
+            index = session.index + 1
+            label = f"{score.quiz.name} ({index} of {total})"
+            options.append({
+                "session_id": session.id,
+                "label": label
+            })
 
-    session, _ = QuizSession.objects.get_or_create(
-        participant=participant,
-        quiz=quiz,
-        score_obj=score,
-        active=True,
-        defaults={"index": score.score, "score": score.score, "questions": questions},
-    )
-
-    response = {
-        "quiz_name": quiz.name,
-        "question": {
-            "text": questions[session.index]["text"],
-            "options": questions[session.index]["options"]
-        }
-    }
-    return JsonResponse(response)
+    return JsonResponse({
+        "message": "📝 You have unfinished quizzes. Select one to continue:",
+        "options": options
+    })
 
 @csrf_exempt
 def process_message(request):
@@ -59,6 +56,23 @@ def process_message(request):
 
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
+    # Check if resuming a session
+    if text.startswith("RESUME__"):
+        session_id = text.replace("RESUME__", "").split("|")[0].strip()
+        try:
+            session = QuizSession.objects.get(id=session_id, participant=participant, active=True)
+        except QuizSession.DoesNotExist:
+            return JsonResponse({"error": "Session not found or already completed."})
+        
+        question = session.questions[session.index]
+        return JsonResponse({
+            "type": "question",
+            "message": question["text"],
+            "options": question["options"],
+            "progress": f"Question {session.index + 1} of {len(session.questions)}"
+        })
+
+    
     quiz = Quiz.objects.filter(name=text, is_active=True).first()
     if quiz:
         if quiz.status == "private" and quiz.participant != participant:
@@ -73,10 +87,11 @@ def process_message(request):
             questions=questions,
         )
         return JsonResponse({
-        "type": "question",
-        "message": questions[0]["text"],
-        "options": questions[0]["options"]
-    })
+            "type": "question",
+            "message": questions[0]["text"],
+            "options": questions[0]["options"],
+            "progress": f"Question 1 of {len(questions)}"
+        })
 
     session = QuizSession.objects.filter(participant=participant, active=True).first()
     if not session:
@@ -85,21 +100,19 @@ def process_message(request):
     question = session.questions[session.index]
     correct = question["correct"]
     selected = text.strip().upper()[0]
-    # Build formatted question + options
     question_text = question["text"]
     options = question["options"]
 
-    # Format options
-    formatted_options = ""
-    for opt in options:
-        formatted_options += f"{opt}\n"
+    formatted_options = "\n".join(options)
+    full_feedback = f"*Q{session.index + 1}*: {question_text}\n{formatted_options}\nYour Answer: {text.strip()}\n"
+    full_feedback += "✅ Correct!" if selected == correct else f"❌ Incorrect. Correct Answer: {correct}"
 
-    # Full formatted feedback message
-    full_feedback = f"*Q{session.index + 1}*: {question_text}\n" \
-                    f"{formatted_options}\n" \
-                    f"Your Answer: {text.strip()}\n" \
-                    f"{'✅ Correct!' if selected == correct else f'❌ Incorrect. Correct Answer: {correct}'}"
-
+    # Check if user input is one of the options
+    if text.strip() not in options:
+        return JsonResponse({
+            "error": "❗ The answer you provided is not in the list of options.\n\n"
+                    "Use /continue to resume your quiz properly."
+        })
 
     if selected == correct:
         session.score += 1
@@ -114,22 +127,21 @@ def process_message(request):
         session.score_obj.end_time = timezone.now()
         session.save()
         session.score_obj.save()
-
-        final_msg = f"🎉 You've completed the *{quiz.name}* quiz!\n\n" \
-                f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n" \
-                f"Use /start to try a new quiz or /continue if you left one unfinished."
+        quiz_name = session.quiz.name if session.quiz else "Quiz"
         return JsonResponse({
             "type": "feedback",
             "feedback": full_feedback,
-            "final_message": final_msg,
+            "final_message": f"🎉 You've completed the *{quiz_name}* quiz!\n\n"
+                             f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n"
+                             "Use /start to try a new quiz or /continue if you left one unfinished.",
             "final_score": session.score,
-            "total_questions": len(session.questions)
+            "total_questions": len(session.questions),
+            "progress": f"Completed {session.index} of {len(session.questions)}"
         })
-
 
     return JsonResponse({
         "type": "feedback",
         "feedback": full_feedback,
-        "question": session.questions[session.index]
+        "question": session.questions[session.index],
+        "progress": f"Question {session.index + 1} of {len(session.questions)}"
     })
-
