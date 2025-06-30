@@ -5,7 +5,7 @@ from django.core.cache import cache
 import hashlib
 
 def get_questions_from_sheet(url):
-    print(f"📥 Loading sheet from: {url}")
+    # print(f"📥 Loading sheet from: {url}")
     # Generate a cache key based on a hash of the URL
     cache_key = f"quiz_questions:{hashlib.md5(url.encode()).hexdigest()}"
     # print(f"🔑 Cache key: {cache_key}")
