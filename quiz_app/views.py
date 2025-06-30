@@ -39,7 +39,10 @@ def continue_session(request):
 
     response = {
         "quiz_name": quiz.name,
-        "question": questions[session.index],
+        "question": {
+            "text": questions[session.index]["text"],
+            "options": questions[session.index]["options"]
+        }
     }
     return JsonResponse(response)
 
@@ -69,7 +72,11 @@ def process_message(request):
             score_obj=score,
             questions=questions,
         )
-        return JsonResponse({"type": "question", "question": questions[0]})
+        return JsonResponse({
+        "type": "question",
+        "message": questions[0]["text"],
+        "options": questions[0]["options"]
+    })
 
     session = QuizSession.objects.filter(participant=participant, active=True).first()
     if not session:
@@ -78,7 +85,21 @@ def process_message(request):
     question = session.questions[session.index]
     correct = question["correct"]
     selected = text.strip().upper()[0]
-    feedback = "✅ Correct!" if selected == correct else f"❌ Incorrect. Correct: {correct}"
+    # Build formatted question + options
+    question_text = question["text"]
+    options = question["options"]
+
+    # Format options
+    formatted_options = ""
+    for opt in options:
+        formatted_options += f"{opt}\n"
+
+    # Full formatted feedback message
+    full_feedback = f"*Q{session.index + 1}*: {question_text}\n" \
+                    f"{formatted_options}\n" \
+                    f"Your Answer: {text.strip()}\n" \
+                    f"{'✅ Correct!' if selected == correct else f'❌ Incorrect. Correct Answer: {correct}'}"
+
 
     if selected == correct:
         session.score += 1
@@ -93,6 +114,22 @@ def process_message(request):
         session.score_obj.end_time = timezone.now()
         session.save()
         session.score_obj.save()
-        return JsonResponse({"type": "feedback", "feedback": feedback, "final_score": session.score, "total_questions": len(session.questions)})
 
-    return JsonResponse({"type": "feedback", "feedback": feedback, "question": session.questions[session.index]})
+        final_msg = f"🎉 You've completed the *{quiz.name}* quiz!\n\n" \
+                f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n" \
+                f"Use /start to try a new quiz or /continue if you left one unfinished."
+        return JsonResponse({
+            "type": "feedback",
+            "feedback": full_feedback,
+            "final_message": final_msg,
+            "final_score": session.score,
+            "total_questions": len(session.questions)
+        })
+
+
+    return JsonResponse({
+        "type": "feedback",
+        "feedback": full_feedback,
+        "question": session.questions[session.index]
+    })
+
