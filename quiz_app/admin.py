@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import QuizParticipant, QuizScore, Quiz, QuizSession, QuizAccess
+from .models import QuizParticipant, QuizScore, Quiz, QuizSession, QuizAccess, RetryQuizScore
 
 class QuizAccessInline(admin.TabularInline):
     model = QuizAccess
@@ -31,3 +31,10 @@ class QuizScoreAdmin(admin.ModelAdmin):
 @admin.register(QuizSession)
 class QuizSessionAdmin(admin.ModelAdmin):
     list_display = ("participant", "quiz", "score_obj", "index", "score", "active")
+
+@admin.register(RetryQuizScore)
+class RetryQuizScoreAdmin(admin.ModelAdmin):
+    list_display = ("original_score", "score", "total_questions", "index", "start_time", "end_time")
+    list_filter = ("start_time", "end_time")
+    search_fields = ("original_score__quiz__name", "original_score__participant__telegram_id")
+    ordering = ("-start_time",)

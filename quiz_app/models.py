@@ -88,3 +88,20 @@ class QuizSession(models.Model):
     score = models.IntegerField(default=0)
     active = models.BooleanField(default=True, db_index=True)
     questions = JSONField(default=list)
+
+class RetryQuizScore(models.Model):
+    original_score = models.ForeignKey(QuizScore, on_delete=models.CASCADE, related_name="retry_attempts")
+    score = models.IntegerField(default=0)
+    total_questions = models.IntegerField(default=0, editable=False)
+    missed_questions = models.JSONField(default=list, blank=True)
+    index = models.IntegerField(default=0)
+    start_time = models.DateTimeField(auto_now_add=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.total_questions:
+            self.total_questions = len(self.original_score.missed_questions or [])
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Retry by {self.original_score.participant} on {self.original_score.quiz.name} – {self.score}/{self.total_questions}"
