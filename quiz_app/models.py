@@ -70,6 +70,7 @@ class QuizScore(models.Model):
     quiz = models.ForeignKey("Quiz", on_delete=models.CASCADE, related_name="scores")
     score = models.IntegerField(default=0)
     total_questions = models.IntegerField(default=0)
+    missed_questions = JSONField(default=list, blank=True)
     start_time = models.DateTimeField(default=timezone.now) 
     end_time = models.DateTimeField(null=True, blank=True, db_index=True) 
     attempt_time = models.DateTimeField(auto_now_add=True)

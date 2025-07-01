@@ -65,7 +65,7 @@ def get_questions_from_sheet(url):
             raise ValueError(f"❌ Correct answer '{correct}' for question {i} does not match any provided options")
 
         questions.append({
-            "number": row.get("Question Number", str(i)).strip(),
+            "number": row.get("question_number", str(i)).strip(),
             "text": question_text,
             "options": options,
             "correct": correct,

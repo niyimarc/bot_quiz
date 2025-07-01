@@ -151,18 +151,18 @@ def process_message(request):
         options = question["options"]
         normalized_options = [normalize(opt) for opt in options]
 
-        # logger.debug(f"[DEBUG] Normalized user input: {repr(user_input)}")
-        # logger.debug(f"[DEBUG] Normalized options: {normalized_options}")
-        # print("--------- DEBUG INFO ---------")
-        # print("Raw user input:", repr(text))
-        # print("Normalized user input:", repr(user_input))
-        # print("Raw options:")
-        # for opt in options:
-        #     print("  -", repr(opt))
-        # print("Normalized options:")
-        # for norm in normalized_options:
-        #     print("  -", repr(norm))
-        # print("-------------------------------")
+        logger.debug(f"[DEBUG] Normalized user input: {repr(user_input)}")
+        logger.debug(f"[DEBUG] Normalized options: {normalized_options}")
+        print("--------- DEBUG INFO ---------")
+        print("Raw user input:", repr(text))
+        print("Normalized user input:", repr(user_input))
+        print("Raw options:")
+        for opt in options:
+            print("  -", repr(opt))
+        print("Normalized options:")
+        for norm in normalized_options:
+            print("  -", repr(norm))
+        print("-------------------------------")
 
         if user_input not in normalized_options:
             return JsonResponse({
@@ -182,6 +182,11 @@ def process_message(request):
         if is_correct:
             session.score += 1
             session.score_obj.score += 1
+        else:
+            # Track the missed question number (starting from 1, not 0)
+            if not isinstance(session.score_obj.missed_questions, list):
+                session.score_obj.missed_questions = []
+            session.score_obj.missed_questions.append(session.index + 1)
 
         session.index += 1
         session.score_obj.save()
