@@ -151,18 +151,18 @@ def process_message(request):
         options = question["options"]
         normalized_options = [normalize(opt) for opt in options]
 
-        logger.debug(f"[DEBUG] Normalized user input: {repr(user_input)}")
-        logger.debug(f"[DEBUG] Normalized options: {normalized_options}")
-        print("--------- DEBUG INFO ---------")
-        print("Raw user input:", repr(text))
-        print("Normalized user input:", repr(user_input))
-        print("Raw options:")
-        for opt in options:
-            print("  -", repr(opt))
-        print("Normalized options:")
-        for norm in normalized_options:
-            print("  -", repr(norm))
-        print("-------------------------------")
+        # logger.debug(f"[DEBUG] Normalized user input: {repr(user_input)}")
+        # logger.debug(f"[DEBUG] Normalized options: {normalized_options}")
+        # print("--------- DEBUG INFO ---------")
+        # print("Raw user input:", repr(text))
+        # print("Normalized user input:", repr(user_input))
+        # print("Raw options:")
+        # for opt in options:
+        #     print("  -", repr(opt))
+        # print("Normalized options:")
+        # for norm in normalized_options:
+        #     print("  -", repr(norm))
+        # print("-------------------------------")
 
         if user_input not in normalized_options:
             return JsonResponse({
@@ -216,3 +216,28 @@ def process_message(request):
     except Exception as e:
         logger.exception("❌ CRASH in process_message")
         return JsonResponse({"error": "Internal Server Error"}, status=500)
+
+@csrf_exempt
+def get_participated_quizzes(request):
+    telegram_id = request.GET.get("telegram_id")
+    if not telegram_id:
+        return JsonResponse({"error": "Missing telegram_id"}, status=400)
+
+    try:
+        participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
+    except QuizParticipant.DoesNotExist:
+        return JsonResponse({"error": "Participant not found or inactive"}, status=404)
+
+    scores = QuizScore.objects.filter(participant=participant)
+
+    data = []
+    for score in scores:
+        data.append({
+            "quiz_name": score.quiz.name,
+            "score": score.score,
+            "total_questions": score.total_questions,
+            "start_time": score.start_time.isoformat(),
+            "end_time": score.end_time.isoformat() if score.end_time else None,
+        })
+
+    return JsonResponse(data, safe=False)
