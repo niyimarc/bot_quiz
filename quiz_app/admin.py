@@ -1,11 +1,16 @@
 from django.contrib import admin
-from .models import QuizParticipant, QuizScore, Quiz, QuizSession
+from .models import QuizParticipant, QuizScore, Quiz, QuizSession, QuizAccess
+
+class QuizAccessInline(admin.TabularInline):
+    model = QuizAccess
+    extra = 1
 
 @admin.register(Quiz)
 class QuizAdmin(admin.ModelAdmin):
     list_display = ("name", "sheet_url", "is_active", "status")
     search_fields = ("name",)
     list_filter = ("is_active", "status")
+    inlines = [QuizAccessInline]
 
 @admin.register(QuizParticipant)
 class QuizParticipantAdmin(admin.ModelAdmin):

@@ -1,7 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from django.db.models import JSONField
-from .constant import STATUS_CHOICES
+from .constant import STATUS_CHOICES, ACCESS_TYPE_CHOICES
 
 class Quiz(models.Model):
     name = models.CharField(max_length=255, unique=True)
@@ -17,6 +17,25 @@ class Quiz(models.Model):
     def __str__(self):
         return self.name
     
+    def get_access_type(self, participant):
+        if self.participant == participant:
+            return "full_access"
+        access = self.accesses.filter(participant=participant).first()
+        return access.access_type if access else None
+
+    def is_accessible_by(self, participant):
+        return (
+            self.status == "public" or
+            self.participant == participant or
+            self.accesses.filter(participant=participant).exists()
+        )
+
+    def can_participant_edit(self, participant):
+        if self.participant == participant:
+            return True
+        access = self.accesses.filter(participant=participant, access_type="full_access").first()
+        return bool(access)
+    
 class QuizParticipant(models.Model):
     telegram_id = models.BigIntegerField(unique=True, db_index=True)
     username = models.CharField(max_length=150, blank=True, null=True)
@@ -30,6 +49,21 @@ class QuizParticipant(models.Model):
     class Meta:
         verbose_name = "Participant"
         verbose_name_plural = "Participants"
+
+class QuizAccess(models.Model):
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="accesses")
+    participant = models.ForeignKey(QuizParticipant, on_delete=models.CASCADE, related_name="accessible_quizzes")
+    granted_by = models.ForeignKey(QuizParticipant, on_delete=models.SET_NULL, null=True, blank=True, related_name="granted_accesses")
+    access_type = models.CharField(max_length=20, choices=ACCESS_TYPE_CHOICES, default="participate_access")
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("quiz", "participant")
+        verbose_name = "Quiz Access"
+        verbose_name_plural = "Quiz Accesses"
+
+    def __str__(self):
+        return f"{self.participant} has {self.access_type} to {self.quiz.name}"
 
 class QuizScore(models.Model):
     participant = models.ForeignKey("QuizParticipant", on_delete=models.CASCADE, related_name="scores")

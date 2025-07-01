@@ -81,8 +81,8 @@ def process_message(request):
         # Handle new quiz start
         quiz = Quiz.objects.filter(name=text, is_active=True).first()
         if quiz:
-            if quiz.status == "private" and quiz.participant != participant:
-                return JsonResponse({"error": "This quiz is private."}, status=403)
+            if not quiz.is_accessible_by(participant):
+                return JsonResponse({"error": "This quiz is private and you do not have access."}, status=403)
 
             questions = get_questions_from_sheet(quiz.sheet_url)
             score = QuizScore.objects.create(participant=participant, quiz=quiz, total_questions=len(questions))
