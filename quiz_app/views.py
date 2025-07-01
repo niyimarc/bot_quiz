@@ -8,8 +8,22 @@ logger = logging.getLogger(__name__)
 
 @csrf_exempt
 def get_quizzes(request):
-    quizzes = Quiz.objects.filter(is_active=True, status="public").values_list("name", flat=True)
-    return JsonResponse(list(quizzes), safe=False)
+    telegram_id = request.GET.get("telegram_id")
+    if not telegram_id:
+        return JsonResponse({"error": "Missing telegram_id"}, status=400)
+
+    try:
+        participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
+    except QuizParticipant.DoesNotExist:
+        return JsonResponse({"error": "Participant not found or inactive"}, status=404)
+
+    # Filter all active quizzes and apply accessibility check
+    accessible_quizzes = [
+        quiz.name for quiz in Quiz.objects.filter(is_active=True)
+        if quiz.is_accessible_by(participant)
+    ]
+
+    return JsonResponse(accessible_quizzes, safe=False)
 
 @csrf_exempt
 def continue_session(request):
