@@ -105,3 +105,11 @@ class RetryQuizScore(models.Model):
 
     def __str__(self):
         return f"Retry by {self.original_score.participant} on {self.original_score.quiz.name} – {self.score}/{self.total_questions}"
+    
+class RetrySession(models.Model):
+    participant = models.ForeignKey(QuizParticipant, on_delete=models.CASCADE)
+    retry = models.ForeignKey(RetryQuizScore, on_delete=models.CASCADE)
+    active = models.BooleanField(default=True)
+    expecting_answer = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+

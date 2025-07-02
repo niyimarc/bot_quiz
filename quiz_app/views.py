@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
-from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore
+from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore, RetrySession
 from .utils import get_questions_from_sheet, normalize
 import logging
 logger = logging.getLogger(__name__)
@@ -96,6 +96,7 @@ def process_message(request):
         # Handle new quiz start
         quiz = Quiz.objects.filter(name=text, is_active=True).first()
         if quiz:
+            RetrySession.objects.filter(participant=participant).update(active=False)  # <-- clean any leftover retry session
             if not quiz.is_accessible_by(participant):
                 return JsonResponse({"error": "This quiz is private and you do not have access."}, status=403)
 
@@ -266,39 +267,37 @@ def retry_missed_question(request):
     except (QuizParticipant.DoesNotExist, QuizScore.DoesNotExist):
         return JsonResponse({"error": "Participant or quiz score not found"}, status=404)
 
+    all_questions = get_questions_from_sheet(original_score.quiz.sheet_url)
     raw_missed = original_score.missed_questions or []
     missed_questions = [(i - 1) for i in raw_missed if isinstance(i, int) and i > 0]
 
-    if not missed_questions:
-        return JsonResponse({"error": "🎉 No missed questions to retry!"}, status=400)
-
-    all_questions = get_questions_from_sheet(original_score.quiz.sheet_url)
     if any(i >= len(all_questions) or i < 0 for i in missed_questions):
         return JsonResponse({
             "error": "⚠️ The quiz content has changed since your last attempt. Retry session closed."
         }, status=400)
 
-    retry = RetryQuizScore.objects.create(
-        original_score=original_score,
-        missed_questions=missed_questions,
-        total_questions=len(missed_questions),
-        score=0,
-        index=0
-    )
+    # Check for an active retry session first
+    retry_session = RetrySession.objects.filter(participant=participant, active=True).first()
+    if retry_session:
+        retry = retry_session.retry
+    else:
+        if not missed_questions:
+            return JsonResponse({"error": "🎉 No missed questions to retry!"}, status=400)
 
-    if retry.index >= retry.total_questions:
-        retry.end_time = timezone.now()
-        retry.save()
-        return JsonResponse({
-            "type": "complete",
-            "message": f"✅ Retry complete! Your score: {retry.score}/{retry.total_questions}"
-        })
+        retry = RetryQuizScore.objects.create(
+            original_score=original_score,
+            missed_questions=missed_questions,
+            total_questions=len(missed_questions),
+            score=0,
+            index=0
+        )
+        RetrySession.objects.filter(participant=participant).update(active=False)
+        RetrySession.objects.create(participant=participant, retry=retry)
 
-    current_index = retry.missed_questions[retry.index]
-    current_question = all_questions[current_index]
-
-    # No answer yet — return the first retry question
+    # Return the next question if no answer was submitted
     if not answer:
+        current_index = retry.missed_questions[retry.index]
+        current_question = all_questions[current_index]
         return JsonResponse({
             "type": "question",
             "message": current_question["text"],
@@ -308,7 +307,10 @@ def retry_missed_question(request):
             "score_id": original_score.id
         })
 
-    # Validate and evaluate answer
+    # Evaluate answer
+    current_index = retry.missed_questions[retry.index]
+    current_question = all_questions[current_index]
+
     normalized_answer = normalize(answer)
     correct_answer = normalize(current_question["correct"])
     normalized_options = [normalize(opt) for opt in current_question["options"]]
@@ -319,7 +321,7 @@ def retry_missed_question(request):
             "retry_id": retry.id
         })
 
-    question_number = retry.index + 1  # For display
+    question_number = retry.index + 1
     formatted_options = "\n".join(current_question["options"])
     feedback = f"*Q{question_number}*: {current_question['text']}\n{formatted_options}\n"
     feedback += f"Your Answer: {answer.strip()}\n"
@@ -333,10 +335,10 @@ def retry_missed_question(request):
     retry.index += 1
     retry.save()
 
-    # Retry finished
     if retry.index >= retry.total_questions:
         retry.end_time = timezone.now()
         retry.save()
+        RetrySession.objects.filter(participant=participant).update(active=False)
         return JsonResponse({
             "type": "complete",
             "feedback": feedback,
@@ -349,13 +351,6 @@ def retry_missed_question(request):
 
     # Next question
     next_index = retry.missed_questions[retry.index]
-    if next_index >= len(all_questions):
-        retry.end_time = timezone.now()
-        retry.save()
-        return JsonResponse({
-            "error": "⚠️ The quiz content has changed since your last attempt. Retry session closed."
-        }, status=400)
-
     next_question = all_questions[next_index]
 
     return JsonResponse({
@@ -399,3 +394,36 @@ def get_retryable_scores(request):
         })
 
     return JsonResponse(retryable, safe=False)
+
+@csrf_exempt
+def retry_session_status(request):
+    telegram_id = request.GET.get("telegram_id")
+    if not telegram_id:
+        return JsonResponse({"error": "Missing telegram_id"}, status=400)
+
+    try:
+        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+        session = RetrySession.objects.filter(participant=participant, active=True, expecting_answer=True).latest("updated_at")
+
+        return JsonResponse({
+            "score_id": session.retry.original_score.id,
+            "retry_id": session.retry.id,
+            "expecting_answer": session.expecting_answer,
+        })
+    except:
+        return JsonResponse({})
+    
+@csrf_exempt
+def clear_retry_session(request):
+    telegram_id = request.GET.get("telegram_id")
+    if not telegram_id:
+        return JsonResponse({"error": "Missing telegram_id"}, status=400)
+
+    try:
+        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+    except QuizParticipant.DoesNotExist:
+        return JsonResponse({"error": "Participant not found"}, status=404)
+
+    RetrySession.objects.filter(participant=participant).update(active=False, expecting_answer=False)
+    return JsonResponse({"status": "cleared"})
+

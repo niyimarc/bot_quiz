@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import QuizParticipant, QuizScore, Quiz, QuizSession, QuizAccess, RetryQuizScore
+from .models import QuizParticipant, QuizScore, Quiz, QuizSession, QuizAccess, RetryQuizScore, RetrySession
 
 class QuizAccessInline(admin.TabularInline):
     model = QuizAccess
@@ -38,3 +38,9 @@ class RetryQuizScoreAdmin(admin.ModelAdmin):
     list_filter = ("start_time", "end_time")
     search_fields = ("original_score__quiz__name", "original_score__participant__telegram_id")
     ordering = ("-start_time",)
+
+@admin.register(RetrySession)
+class RetrySessionAdmin(admin.ModelAdmin):
+    list_display = ("participant", "retry", "active", "expecting_answer", "updated_at")
+    list_filter = ("active", "expecting_answer")
+    ordering = ("-updated_at",)
