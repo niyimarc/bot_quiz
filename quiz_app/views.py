@@ -12,18 +12,19 @@ def get_quizzes(request):
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
 
-    try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
-    except QuizParticipant.DoesNotExist:
-        return JsonResponse({"error": "Participant not found or inactive"}, status=404)
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id, is_active=True)
 
-    # Filter all active quizzes and apply accessibility check
+    # Show public or otherwise accessible quizzes
     accessible_quizzes = [
         quiz.name for quiz in Quiz.objects.filter(is_active=True)
         if quiz.is_accessible_by(participant)
     ]
 
+    if not accessible_quizzes:
+        return JsonResponse({"message": "No accessible quizzes found."}, status=200)
+
     return JsonResponse(accessible_quizzes, safe=False)
+
 
 @csrf_exempt
 def continue_session(request):
@@ -151,18 +152,18 @@ def process_message(request):
         options = question["options"]
         normalized_options = [normalize(opt) for opt in options]
 
-        logger.debug(f"[DEBUG] Normalized user input: {repr(user_input)}")
-        logger.debug(f"[DEBUG] Normalized options: {normalized_options}")
-        print("--------- DEBUG INFO ---------")
-        print("Raw user input:", repr(text))
-        print("Normalized user input:", repr(user_input))
-        print("Raw options:")
-        for opt in options:
-            print("  -", repr(opt))
-        print("Normalized options:")
-        for norm in normalized_options:
-            print("  -", repr(norm))
-        print("-------------------------------")
+        # logger.debug(f"[DEBUG] Normalized user input: {repr(user_input)}")
+        # logger.debug(f"[DEBUG] Normalized options: {normalized_options}")
+        # print("--------- DEBUG INFO ---------")
+        # print("Raw user input:", repr(text))
+        # print("Normalized user input:", repr(user_input))
+        # print("Raw options:")
+        # for opt in options:
+        #     print("  -", repr(opt))
+        # print("Normalized options:")
+        # for norm in normalized_options:
+        #     print("  -", repr(norm))
+        # print("-------------------------------")
 
         if user_input not in normalized_options:
             return JsonResponse({
@@ -265,20 +266,27 @@ def retry_missed_question(request):
     except (QuizParticipant.DoesNotExist, QuizScore.DoesNotExist):
         return JsonResponse({"error": "Participant or quiz score not found"}, status=404)
 
-    # Ensure the user has missed questions
-    missed_questions = original_score.missed_questions or []
+    raw_missed = original_score.missed_questions or []
+    missed_questions = [(i - 1) for i in raw_missed if isinstance(i, int) and i > 0]
+
     if not missed_questions:
         return JsonResponse({"error": "🎉 No missed questions to retry!"}, status=400)
-    
-    # Get or create a RetryQuizScore
-    retry, created = RetryQuizScore.objects.get_or_create(
+
+    all_questions = get_questions_from_sheet(original_score.quiz.sheet_url)
+    if any(i >= len(all_questions) or i < 0 for i in missed_questions):
+        return JsonResponse({
+            "error": "⚠️ The quiz content has changed since your last attempt. Retry session closed."
+        }, status=400)
+
+    retry = RetryQuizScore.objects.create(
         original_score=original_score,
-        end_time__isnull=True,
-        defaults={"missed_questions": original_score.missed_questions}
+        missed_questions=missed_questions,
+        total_questions=len(missed_questions),
+        score=0,
+        index=0
     )
 
-    # If retry is already finished
-    if retry.index >= len(retry.missed_questions):
+    if retry.index >= retry.total_questions:
         retry.end_time = timezone.now()
         retry.save()
         return JsonResponse({
@@ -286,69 +294,82 @@ def retry_missed_question(request):
             "message": f"✅ Retry complete! Your score: {retry.score}/{retry.total_questions}"
         })
 
-    # Get the missed question index
-    question_index = retry.missed_questions[retry.index]
-    all_questions = get_questions_from_sheet(original_score.quiz.sheet_url)
-    if question_index >= len(all_questions):
-        return JsonResponse({"error": "Invalid question index"}, status=500)
+    current_index = retry.missed_questions[retry.index]
+    current_question = all_questions[current_index]
 
-    current_question = all_questions[question_index]
-
-    # If user hasn't answered yet, send the question
+    # No answer yet — return the first retry question
     if not answer:
         return JsonResponse({
             "type": "question",
             "message": current_question["text"],
             "options": current_question["options"],
             "progress": f"Retry Question {retry.index + 1} of {retry.total_questions}",
-            "retry_id": retry.id
+            "retry_id": retry.id,
+            "score_id": original_score.id
         })
 
-    # Check answer
+    # Validate and evaluate answer
     normalized_answer = normalize(answer)
     correct_answer = normalize(current_question["correct"])
-    options = [normalize(opt) for opt in current_question["options"]]
+    normalized_options = [normalize(opt) for opt in current_question["options"]]
 
-    if normalized_answer not in options:
+    if normalized_answer not in normalized_options:
         return JsonResponse({
             "error": "❗ Your answer is not in the list of options.",
             "retry_id": retry.id
         })
 
-    feedback = f"*Q{retry.index + 1}*: {current_question['text']}\n"
-    feedback += f"Your Answer: {answer}\n"
+    question_number = retry.index + 1  # For display
+    formatted_options = "\n".join(current_question["options"])
+    feedback = f"*Q{question_number}*: {current_question['text']}\n{formatted_options}\n"
+    feedback += f"Your Answer: {answer.strip()}\n"
+
     if normalized_answer.startswith(correct_answer):
         feedback += "✅ Correct!"
         retry.score += 1
     else:
         feedback += f"❌ Incorrect. Correct answer is: {current_question['correct']}"
 
-    # Move to next retry question
     retry.index += 1
-    if retry.index >= retry.total_questions:
-        retry.end_time = timezone.now()
     retry.save()
 
-    # Send next or final message
+    # Retry finished
     if retry.index >= retry.total_questions:
+        retry.end_time = timezone.now()
+        retry.save()
         return JsonResponse({
             "type": "complete",
             "feedback": feedback,
             "final_score": retry.score,
             "total_questions": retry.total_questions,
-            "message": f"🎯 Done! You scored {retry.score} out of {retry.total_questions} in retry."
+            "message": f"🎉 Congratulations on completing your retry session!\n\n"
+                       f"✅ Final Score: {retry.score}/{retry.total_questions}\n"
+                       f"📚 Keep practicing to improve even more!"
         })
+
+    # Next question
+    next_index = retry.missed_questions[retry.index]
+    if next_index >= len(all_questions):
+        retry.end_time = timezone.now()
+        retry.save()
+        return JsonResponse({
+            "error": "⚠️ The quiz content has changed since your last attempt. Retry session closed."
+        }, status=400)
+
+    next_question = all_questions[next_index]
 
     return JsonResponse({
         "type": "feedback",
         "feedback": feedback,
         "next_question": {
-            "text": all_questions[retry.missed_questions[retry.index]]["text"],
-            "options": all_questions[retry.missed_questions[retry.index]]["options"],
+            "text": next_question["text"],
+            "options": next_question["options"],
         },
         "progress": f"Retry Question {retry.index + 1} of {retry.total_questions}",
         "retry_id": retry.id
     })
+
+
 
 @csrf_exempt
 def get_retryable_scores(request):
@@ -370,11 +391,6 @@ def get_retryable_scores(request):
 
         if not missed:
             continue  # No missed questions
-
-        # Check if a RetryQuizScore exists (ongoing or completed)
-        has_retry = RetryQuizScore.objects.filter(original_score=score).exists()
-        if has_retry:
-            continue
 
         retryable.append({
             "quiz_name": score.quiz.name,
