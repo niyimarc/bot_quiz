@@ -13,6 +13,8 @@ from .views import (
     update_quiz_status,
     delete_quiz,
     edit_quiz_name,
+    grant_quiz_access,
+    get_quiz_access_list,
     )
 
 urlpatterns = [
@@ -29,4 +31,6 @@ urlpatterns = [
     path("quiz/update_quiz_status/", update_quiz_status),
     path('quiz/delete_quiz/', delete_quiz),
     path('quiz/edit_quiz_name/', edit_quiz_name),
+    path("quiz/grant_quiz_access/", grant_quiz_access),
+    path("quiz/get_quiz_access_list/", get_quiz_access_list)
 ]

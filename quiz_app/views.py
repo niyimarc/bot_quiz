@@ -2,8 +2,8 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.db import IntegrityError
-from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore, RetrySession
-from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session
+from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore, RetrySession, QuizAccess
+from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session, get_or_create_participant
 import json
 import logging
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ def get_quizzes(request):
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
 
-    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id, is_active=True)
+    participant, _ = get_or_create_participant(request.GET)
 
     # Show public or otherwise accessible quizzes
     accessible_quizzes = [
@@ -625,3 +625,119 @@ def edit_quiz_name(request):
         return JsonResponse({'error': 'Quiz not found'}, status=404)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+@csrf_exempt
+def grant_quiz_access(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Only POST method allowed."}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        telegram_id = data.get("telegram_id")
+        target_telegram_id = data.get("target_telegram_id")
+        target_username = data.get("target_username", "").lstrip("@").lower()
+        quiz_id = data.get("quiz_id")
+        access_type = data.get("access_type", "participate_access")
+
+        if not all([telegram_id, quiz_id, access_type]) or not (target_telegram_id or target_username):
+            return JsonResponse({"error": "⚠️ Missing required details. Please provide all necessary information."}, status=400)
+
+        granter = QuizParticipant.objects.filter(telegram_id=telegram_id).first()
+        if not granter:
+            return JsonResponse({"error": "❗️ We couldn't identify you as a participant."}, status=404)
+
+        quiz = Quiz.objects.filter(id=quiz_id).first()
+        if not quiz:
+            return JsonResponse({"error": "❗️ This quiz doesn't seem to exist."}, status=404)
+
+        if not (quiz.participant == granter or quiz.get_access_type(granter) == "full_access"):
+            return JsonResponse({"error": "🚫 You don't have permission to manage access for this quiz."}, status=403)
+
+        # Resolve or create target
+        target = None
+        if target_telegram_id:
+            target = QuizParticipant.objects.filter(telegram_id=target_telegram_id).first()
+            if not target:
+                # Create if telegram_id is available
+                target = QuizParticipant.objects.create(telegram_id=target_telegram_id)
+        elif target_username:
+            target = QuizParticipant.objects.filter(username__iexact=target_username).first()
+            if not target:
+                target = QuizParticipant.objects.create(username=target_username)
+
+        if not target:
+            return JsonResponse({"error": "❗️ Couldn't find or create the user you're trying to give access to."}, status=404)
+
+        # Prevent granting access to yourself
+        if granter.id == target.id:
+            return JsonResponse({
+                "error": "👤 You already have access to this quiz and can't grant access to yourself."
+            }, status=400)
+
+        # Check for existing access
+        existing_access = QuizAccess.objects.filter(quiz=quiz, participant=target).first()
+        if existing_access:
+            if existing_access.access_type == access_type:
+                return JsonResponse({
+                    "error": f"✅ {target.username or target.telegram_id} already has *{access_type}* access to this quiz."
+                }, status=400)
+            else:
+                # Update the access type
+                existing_access.access_type = access_type
+                existing_access.granted_by = granter
+                existing_access.save()
+                return JsonResponse({
+                    "message": f"🔁 Access level for *{target.username or target.telegram_id}* has been updated to *{access_type}*.",
+                    "updated": True
+                })
+
+        # Grant new access
+        QuizAccess.objects.create(
+            quiz=quiz,
+            participant=target,
+            access_type=access_type,
+            granted_by=granter
+        )
+
+        return JsonResponse({
+            "message": f"✅ Successfully granted *{access_type}* access to *{target.username or target.telegram_id}*.",
+            "created": True
+        })
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "❌ There was a problem reading the request. Please try again."}, status=400)
+    
+@csrf_exempt
+def get_quiz_access_list(request):
+    quiz_id = request.GET.get("quiz_id")
+    if not quiz_id:
+        return JsonResponse({"error": "Missing quiz_id"}, status=400)
+
+    try:
+        quiz = Quiz.objects.get(id=quiz_id)
+    except Quiz.DoesNotExist:
+        return JsonResponse({"error": "Quiz not found"}, status=404)
+
+    access_list = []
+
+    # Include the creator
+    if quiz.participant:
+        access_list.append({
+            "telegram_id": quiz.participant.telegram_id,
+            "username": quiz.participant.username,
+            "access_type": "full_access",
+            "granted_by": None,
+            "granted_at": quiz.created_date.isoformat() if quiz.created_date else None
+        })
+
+    # Include all granted access users
+    for access in quiz.accesses.select_related("participant", "granted_by"):
+        access_list.append({
+            "telegram_id": access.participant.telegram_id,
+            "username": access.participant.username,
+            "access_type": access.access_type,
+            "granted_by": access.granted_by.telegram_id if access.granted_by else None,
+            "granted_at": access.granted_at.isoformat() if access.granted_at else None
+        })
+
+    return JsonResponse(access_list, safe=False)
