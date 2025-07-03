@@ -5,7 +5,7 @@ from .constant import STATUS_CHOICES, ACCESS_TYPE_CHOICES
 
 class Quiz(models.Model):
     name = models.CharField(max_length=255, unique=True)
-    sheet_url = models.URLField()
+    sheet_url = models.URLField(unique=True)
     is_active = models.BooleanField(default=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='public')
     participant = models.ForeignKey(

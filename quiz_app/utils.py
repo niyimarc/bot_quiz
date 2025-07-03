@@ -4,6 +4,7 @@ from io import StringIO
 from django.core.cache import cache
 import hashlib
 import unicodedata
+from .models import RetrySession
 
 def normalize(s):
     """Strip whitespace, quotes, and normalize unicode for fair comparison."""
@@ -74,3 +75,6 @@ def get_questions_from_sheet(url):
     cache.set(cache_key, questions, timeout=600)
 
     return questions
+
+def clear_participant_retry_session(participant):
+    RetrySession.objects.filter(participant=participant).update(active=False, expecting_answer=False)

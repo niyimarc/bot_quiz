@@ -8,6 +8,7 @@ from .views import (
     get_retryable_scores, 
     retry_session_status,
     clear_retry_session,
+    add_quiz,
     )
 
 urlpatterns = [
@@ -19,5 +20,5 @@ urlpatterns = [
     path("quiz/get_retryable_scores/", get_retryable_scores),
     path("quiz/retry_session_status/", retry_session_status),
     path("quiz/clear_retry_session/", clear_retry_session),
-
+    path("quiz/add_quiz/", add_quiz),
 ]

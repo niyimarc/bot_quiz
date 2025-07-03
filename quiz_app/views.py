@@ -1,8 +1,10 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
+from django.db import IntegrityError
 from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore, RetrySession
-from .utils import get_questions_from_sheet, normalize
+from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session
+import json
 import logging
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,8 @@ def process_message(request):
         # Handle new quiz start
         quiz = Quiz.objects.filter(name=text, is_active=True).first()
         if quiz:
-            RetrySession.objects.filter(participant=participant).update(active=False)  # <-- clean any leftover retry session
+            # Clean up any stale retry sessions (safe fallback)
+            RetrySession.objects.filter(participant=participant).update(active=False, expecting_answer=False)
             if not quiz.is_accessible_by(participant):
                 return JsonResponse({"error": "This quiz is private and you do not have access."}, status=403)
 
@@ -291,7 +294,7 @@ def retry_missed_question(request):
             score=0,
             index=0
         )
-        RetrySession.objects.filter(participant=participant).update(active=False)
+        clear_participant_retry_session(participant)
         RetrySession.objects.create(participant=participant, retry=retry)
 
     # Return the next question if no answer was submitted
@@ -338,7 +341,7 @@ def retry_missed_question(request):
     if retry.index >= retry.total_questions:
         retry.end_time = timezone.now()
         retry.save()
-        RetrySession.objects.filter(participant=participant).update(active=False)
+        clear_participant_retry_session(participant)
         return JsonResponse({
             "type": "complete",
             "feedback": feedback,
@@ -427,3 +430,60 @@ def clear_retry_session(request):
     RetrySession.objects.filter(participant=participant).update(active=False, expecting_answer=False)
     return JsonResponse({"status": "cleared"})
 
+@csrf_exempt
+def add_quiz(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    try:
+        if request.content_type == "application/json":
+            data = json.loads(request.body)
+        else:
+            data = request.POST # handles x-www-form-urlencoded (from PHP)
+
+        telegram_id = data.get("telegram_id")
+        name = data.get("name")
+        sheet_url = data.get("sheet_url")
+        status = data.get("status", "public").lower()
+
+        if not all([telegram_id, name, sheet_url]):
+            return JsonResponse({"error": "Missing required fields"}, status=400)
+
+        if status not in ["public", "private"]:
+            return JsonResponse({"error": "Invalid status. Must be 'public' or 'private'"}, status=400)
+
+        try:
+            participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+        except QuizParticipant.DoesNotExist:
+            return JsonResponse({"error": "Participant not found"}, status=404)
+
+        if Quiz.objects.filter(name=name).exists():
+            return JsonResponse({"error": "A quiz with this name already exists."}, status=400)
+
+        try:
+            # Will raise ValueError if the sheet is invalid
+            questions = get_questions_from_sheet(sheet_url)
+        except ValueError as e:
+            return JsonResponse({"error": str(e)}, status=400)
+
+        # ✅ Check for existing sheet_url before hitting DB constraint
+        if Quiz.objects.filter(sheet_url=sheet_url.strip()).exists():
+            return JsonResponse({"error": "A quiz with this Google Sheet URL already exists."}, status=400)
+
+        quiz = Quiz.objects.create(
+            name=name.strip(),
+            sheet_url=sheet_url.strip(),
+            status=status,
+            participant=participant,
+            is_active=True
+        )
+
+        return JsonResponse({
+            "message": f"✅ Quiz '{quiz.name}' created successfully with {len(questions)} questions.",
+            "quiz_id": quiz.id
+        })
+
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON body"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": f"Internal Server Error: {str(e)}"}, status=500)
