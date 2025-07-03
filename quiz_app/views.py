@@ -487,3 +487,141 @@ def add_quiz(request):
         return JsonResponse({"error": "Invalid JSON body"}, status=400)
     except Exception as e:
         return JsonResponse({"error": f"Internal Server Error: {str(e)}"}, status=500)
+
+@csrf_exempt
+def get_my_quizzes(request):
+    telegram_id = request.GET.get("telegram_id")
+    if not telegram_id:
+        return JsonResponse({"error": "Missing telegram_id"}, status=400)
+
+    try:
+        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+    except QuizParticipant.DoesNotExist:
+        return JsonResponse({"error": "Participant not found"}, status=404)
+
+    quizzes = Quiz.objects.filter(participant=participant).order_by("-id")
+
+    data = []
+    for quiz in quizzes:
+        try:
+            questions = get_questions_from_sheet(quiz.sheet_url)
+            total_questions = len(questions)
+        except Exception:
+            total_questions = 0
+
+        # All scores related to this quiz
+        quiz_scores = QuizScore.objects.filter(quiz=quiz)
+
+        # Total unique participants
+        total_participants = quiz_scores.values("participant_id").distinct().count()
+
+        # Total attempts
+        total_attempts = quiz_scores.count()
+
+        # Latest attempt
+        last_attempt = quiz_scores.order_by("-attempt_time").values_list("attempt_time", flat=True).first()
+
+        # Retry count (RetryQuizScore tied to this quiz via original_score)
+        retry_count = RetryQuizScore.objects.filter(original_score__quiz=quiz).count()
+
+        data.append({
+            "quiz_id": quiz.id,
+            "quiz_name": quiz.name,
+            "status": quiz.status,
+            "total_questions": total_questions,
+            "created_at": quiz.created_date.isoformat() if quiz.created_date else None,
+            "sheet_url": quiz.sheet_url,
+            "is_active": quiz.is_active,
+            "last_attempt_time": last_attempt.isoformat() if last_attempt else None,
+            "total_participants": total_participants,
+            "total_attempts": total_attempts,
+            "retry_count": retry_count,
+        })
+
+    return JsonResponse(data, safe=False)
+
+@csrf_exempt
+def update_quiz_status(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    telegram_id = request.POST.get("telegram_id")
+    quiz_id = request.POST.get("quiz_id")
+    new_status = request.POST.get("new_status")
+
+    if not all([telegram_id, quiz_id, new_status]):
+        return JsonResponse({"error": "Missing required fields"}, status=400)
+
+    if new_status not in ["public", "private"]:
+        return JsonResponse({"error": "Invalid status. Must be 'public' or 'private'"}, status=400)
+
+    try:
+        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+    except QuizParticipant.DoesNotExist:
+        return JsonResponse({"error": "Participant not found"}, status=404)
+
+    try:
+        quiz = Quiz.objects.get(id=quiz_id, participant=participant)
+    except Quiz.DoesNotExist:
+        return JsonResponse({"error": "Quiz not found or does not belong to you"}, status=404)
+
+    quiz.status = new_status
+    quiz.save()
+
+    return JsonResponse({
+        "message": f"✅ Quiz '{quiz.name}' status updated to '{quiz.status}' successfully."
+    })
+
+@csrf_exempt
+def delete_quiz(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        quiz_id = int(request.POST.get('quiz_id'))
+        telegram_id = request.POST.get('telegram_id')
+        if not telegram_id:
+            return JsonResponse({'error': 'Missing telegram_id'}, status=400)
+
+        quiz = Quiz.objects.get(pk=quiz_id)
+
+        if str(quiz.participant.telegram_id) != str(telegram_id):
+            return JsonResponse({'error': 'Unauthorized'}, status=403)
+
+        quiz.delete()
+        return JsonResponse({'success': True})
+
+    except Quiz.DoesNotExist:
+        return JsonResponse({'error': 'Quiz not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+    
+@csrf_exempt
+def edit_quiz_name(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+    try:
+        quiz_id = int(request.POST.get('quiz_id'))
+        new_name = request.POST.get('new_name', '').strip()
+        telegram_id = request.POST.get('telegram_id')
+
+        if not new_name:
+            return JsonResponse({'error': 'New name is required'}, status=400)
+        if not telegram_id:
+            return JsonResponse({'error': 'Missing telegram_id'}, status=400)
+
+        quiz = Quiz.objects.get(pk=quiz_id)
+
+        if str(quiz.participant.telegram_id) != str(telegram_id):
+            return JsonResponse({'error': 'Unauthorized'}, status=403)
+
+        quiz.name = new_name
+        quiz.save()
+
+        return JsonResponse({'success': True, 'new_name': new_name})
+
+    except Quiz.DoesNotExist:
+        return JsonResponse({'error': 'Quiz not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
