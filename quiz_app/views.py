@@ -191,7 +191,10 @@ def process_message(request):
             # Track the missed question number (starting from 1, not 0)
             if not isinstance(session.score_obj.missed_questions, list):
                 session.score_obj.missed_questions = []
-            session.score_obj.missed_questions.append(session.index + 1)
+            session.score_obj.missed_questions.append({
+                "index": session.index + 1,
+                "selected": text.strip()
+            })
 
         session.index += 1
         session.score_obj.save()
@@ -272,7 +275,13 @@ def retry_missed_question(request):
 
     all_questions = get_questions_from_sheet(original_score.quiz.sheet_url)
     raw_missed = original_score.missed_questions or []
-    missed_questions = [(i - 1) for i in raw_missed if isinstance(i, int) and i > 0]
+    # Support both old (int) and new (dict) formats
+    missed_questions = []
+    for item in raw_missed:
+        if isinstance(item, int) and item > 0:
+            missed_questions.append(item - 1)  # old format (1-based to 0-based)
+        elif isinstance(item, dict) and "index" in item and isinstance(item["index"], int):
+            missed_questions.append(item["index"] - 1)  # new format
 
     if any(i >= len(all_questions) or i < 0 for i in missed_questions):
         return JsonResponse({
@@ -295,7 +304,12 @@ def retry_missed_question(request):
             index=0
         )
         clear_participant_retry_session(participant)
-        RetrySession.objects.create(participant=participant, retry=retry)
+        RetrySession.objects.create(
+            participant=participant, 
+            retry=retry,
+            active=True,
+            expecting_answer=True
+            )
 
     # Return the next question if no answer was submitted
     if not answer:
@@ -366,8 +380,6 @@ def retry_missed_question(request):
         "progress": f"Retry Question {retry.index + 1} of {retry.total_questions}",
         "retry_id": retry.id
     })
-
-
 
 @csrf_exempt
 def get_retryable_scores(request):
