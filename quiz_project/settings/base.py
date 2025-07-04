@@ -75,6 +75,10 @@ DATABASES = {
         'PASSWORD': DB_PASSWORD,
         'HOST': HOST,
         'PORT': PORT,
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+            'init_command': "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'"
+        },
     }
 }
 

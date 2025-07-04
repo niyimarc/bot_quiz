@@ -1,10 +1,33 @@
 from django.db import models
 from django.utils import timezone
-from django.db.models import JSONField
+from django.db.models import JSONField, Q
 from .constant import STATUS_CHOICES, ACCESS_TYPE_CHOICES
+from mptt.models import MPTTModel
 
+class QuizCategory(MPTTModel):
+    name = models.CharField(max_length=255, unique=True)
+    parent = models.ForeignKey(
+        'self', 
+        on_delete=models.CASCADE, 
+        related_name='children', 
+        null=True, 
+        blank=True
+    )
+
+    def __str__(self):
+        return self.name
+
+class QuizManager(models.Manager):
+    def available_to_user(self, participant):
+        return self.filter(
+            Q(status='public') |
+            Q(participant=participant) |
+            Q(accesses__participant=participant)
+        ).distinct()
+    
 class Quiz(models.Model):
     name = models.CharField(max_length=255, unique=True)
+    category = models.ManyToManyField(QuizCategory, related_name='quiz',)
     sheet_url = models.URLField(unique=True)
     is_active = models.BooleanField(default=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='public')
@@ -13,7 +36,8 @@ class Quiz(models.Model):
     )
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
-
+    objects = QuizManager()
+    
     def __str__(self):
         return self.name
     

@@ -2,11 +2,37 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.db import IntegrityError
-from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore, RetrySession, QuizAccess
+from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore, RetrySession, QuizAccess, QuizCategory
 from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session, get_or_create_participant
 import json
 import logging
 logger = logging.getLogger(__name__)
+
+def categories_with_quizzes(request):
+    telegram_id = request.GET.get('telegram_id')
+    if not telegram_id:
+        return JsonResponse({'error': 'telegram_id required'}, status=400)
+
+    quizzes = Quiz.objects.available_to_user(telegram_id)
+    category_ids = quizzes.values_list('category__id', flat=True).distinct()
+
+    categories = QuizCategory.objects.filter(id__in=category_ids).values('id', 'name')
+    return JsonResponse({'categories': list(categories)})
+
+@csrf_exempt
+def quizzes_by_category(request):
+    telegram_id = request.GET.get("telegram_id")
+    category_id = request.GET.get("category_id")
+
+    if not telegram_id or not category_id:
+        return JsonResponse({"error": "telegram_id and category_id required"}, status=400)
+
+    participant, _ = get_or_create_participant(request.GET)
+
+    quizzes = Quiz.objects.filter(is_active=True, category__id=category_id).distinct()
+    accessible = [q.name for q in quizzes if q.is_accessible_by(participant)]
+
+    return JsonResponse(accessible, safe=False)
 
 @csrf_exempt
 def get_quizzes(request):
@@ -442,6 +468,10 @@ def clear_retry_session(request):
     RetrySession.objects.filter(participant=participant).update(active=False, expecting_answer=False)
     return JsonResponse({"status": "cleared"})
 
+def list_categories(request):
+    categories = QuizCategory.objects.all().values("id", "name")
+    return JsonResponse({"categories": list(categories)})
+
 @csrf_exempt
 def add_quiz(request):
     if request.method != "POST":
@@ -478,9 +508,23 @@ def add_quiz(request):
         except ValueError as e:
             return JsonResponse({"error": str(e)}, status=400)
 
-        # ✅ Check for existing sheet_url before hitting DB constraint
+        # Check for existing sheet_url before hitting DB constraint
         if Quiz.objects.filter(sheet_url=sheet_url.strip()).exists():
             return JsonResponse({"error": "A quiz with this Google Sheet URL already exists."}, status=400)
+
+        category_ids = data.get("category_ids", [])  # Can be list or comma-separated string
+        if isinstance(category_ids, str):
+            category_ids = [cid.strip() for cid in category_ids.split(",") if cid.strip().isdigit()]
+        elif isinstance(category_ids, list):
+            category_ids = [str(cid).strip() for cid in category_ids if str(cid).strip().isdigit()]
+        else:
+            category_ids = []
+
+        # Fetch categories from DB
+        categories = QuizCategory.objects.filter(id__in=category_ids)
+        if not categories:
+            return JsonResponse({"error": "You must select at least one valid category."}, status=400)
+
 
         quiz = Quiz.objects.create(
             name=name.strip(),
@@ -489,10 +533,13 @@ def add_quiz(request):
             participant=participant,
             is_active=True
         )
+        if categories:
+            quiz.category.set(categories)
 
         return JsonResponse({
             "message": f"✅ Quiz '{quiz.name}' created successfully with {len(questions)} questions.",
-            "quiz_id": quiz.id
+            "quiz_id": quiz.id,
+            "categories": [cat.name for cat in categories],
         })
 
     except json.JSONDecodeError:

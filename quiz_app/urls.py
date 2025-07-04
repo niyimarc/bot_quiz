@@ -15,6 +15,9 @@ from .views import (
     edit_quiz_name,
     grant_quiz_access,
     get_quiz_access_list,
+    list_categories,
+    categories_with_quizzes,
+    quizzes_by_category
     )
 
 urlpatterns = [
@@ -32,5 +35,8 @@ urlpatterns = [
     path('quiz/delete_quiz/', delete_quiz),
     path('quiz/edit_quiz_name/', edit_quiz_name),
     path("quiz/grant_quiz_access/", grant_quiz_access),
-    path("quiz/get_quiz_access_list/", get_quiz_access_list)
+    path("quiz/get_quiz_access_list/", get_quiz_access_list),
+    path("quiz/list_categories/", list_categories),
+    path("quiz/categories_with_quizzes/", categories_with_quizzes),
+    path("quiz/quizzes_by_category/", quizzes_by_category),
 ]

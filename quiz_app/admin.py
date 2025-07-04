@@ -1,5 +1,19 @@
 from django.contrib import admin
-from .models import QuizParticipant, QuizScore, Quiz, QuizSession, QuizAccess, RetryQuizScore, RetrySession
+from .models import (
+    QuizParticipant, 
+    QuizScore, 
+    Quiz, 
+    QuizSession, 
+    QuizAccess, 
+    RetryQuizScore, 
+    RetrySession, 
+    QuizCategory
+    )
+
+@admin.register(QuizCategory)
+class QuizCategoryAdmin(admin.ModelAdmin):
+    list_display = ("name",)
+    search_fields = ("name",)
 
 class QuizAccessInline(admin.TabularInline):
     model = QuizAccess
