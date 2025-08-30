@@ -13,7 +13,10 @@ def categories_with_quizzes(request):
     if not telegram_id:
         return JsonResponse({'error': 'telegram_id required'}, status=400)
 
-    quizzes = Quiz.objects.available_to_user(telegram_id)
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
+
+    quizzes = Quiz.objects.available_to_user(participant)
+
     category_ids = quizzes.values_list('category__id', flat=True).distinct()
 
     categories = QuizCategory.objects.filter(id__in=category_ids).values('id', 'name')
@@ -27,7 +30,7 @@ def quizzes_by_category(request):
     if not telegram_id or not category_id:
         return JsonResponse({"error": "telegram_id and category_id required"}, status=400)
 
-    participant, _ = get_or_create_participant(request.GET)
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     quizzes = Quiz.objects.filter(is_active=True, category__id=category_id).distinct()
     accessible = [q.name for q in quizzes if q.is_accessible_by(participant)]
@@ -40,7 +43,7 @@ def get_quizzes(request):
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
 
-    participant, _ = get_or_create_participant(request.GET)
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     # Show public or otherwise accessible quizzes
     accessible_quizzes = [
@@ -59,7 +62,7 @@ def continue_session(request):
     telegram_id = request.GET.get("telegram_id")
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
-
+    participant, _ = get_or_create_participant(request.GET)
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
     except QuizParticipant.DoesNotExist:
@@ -98,9 +101,8 @@ def process_message(request):
 
         if not telegram_id or not text:
             return JsonResponse({"error": "Missing telegram_id or text"}, status=400)
-
+        
         participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
-
         # Handle RESUME__<session_id>
         if text.startswith("RESUME__"):
             session_id = text.replace("RESUME__", "").split("|")[0].strip()
@@ -262,6 +264,8 @@ def get_participated_quizzes(request):
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
 
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
+
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
     except QuizParticipant.DoesNotExist:
@@ -292,6 +296,8 @@ def retry_missed_question(request):
 
     if not telegram_id or not original_score_id:
         return JsonResponse({"error": "Missing telegram_id or score_id"}, status=400)
+
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id)
@@ -414,6 +420,8 @@ def get_retryable_scores(request):
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
 
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
+
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id)
     except QuizParticipant.DoesNotExist:
@@ -441,6 +449,8 @@ def retry_session_status(request):
     telegram_id = request.GET.get("telegram_id")
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
+    
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id)
@@ -459,6 +469,8 @@ def clear_retry_session(request):
     telegram_id = request.GET.get("telegram_id")
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
+
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id)
@@ -493,6 +505,8 @@ def add_quiz(request):
 
         if status not in ["public", "private"]:
             return JsonResponse({"error": "Invalid status. Must be 'public' or 'private'"}, status=400)
+
+        participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
         try:
             participant = QuizParticipant.objects.get(telegram_id=telegram_id)
@@ -552,6 +566,8 @@ def get_my_quizzes(request):
     telegram_id = request.GET.get("telegram_id")
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
+
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id)
@@ -614,6 +630,8 @@ def update_quiz_status(request):
     if new_status not in ["public", "private"]:
         return JsonResponse({"error": "Invalid status. Must be 'public' or 'private'"}, status=400)
 
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
+
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id)
     except QuizParticipant.DoesNotExist:
@@ -641,6 +659,8 @@ def delete_quiz(request):
         telegram_id = request.POST.get('telegram_id')
         if not telegram_id:
             return JsonResponse({'error': 'Missing telegram_id'}, status=400)
+
+        participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
         quiz = Quiz.objects.get(pk=quiz_id)
 
@@ -670,6 +690,8 @@ def edit_quiz_name(request):
         if not telegram_id:
             return JsonResponse({'error': 'Missing telegram_id'}, status=400)
 
+        participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
+
         quiz = Quiz.objects.get(pk=quiz_id)
 
         if str(quiz.participant.telegram_id) != str(telegram_id):
@@ -698,6 +720,8 @@ def grant_quiz_access(request):
         quiz_id = data.get("quiz_id")
         access_type = data.get("access_type", "participate_access")
 
+        participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
+        
         if not all([telegram_id, quiz_id, access_type]) or not (target_telegram_id or target_username):
             return JsonResponse({"error": "⚠️ Missing required details. Please provide all necessary information."}, status=400)
 
