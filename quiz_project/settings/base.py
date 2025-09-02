@@ -25,7 +25,11 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework',
+    'rest_framework_simplejwt',
     'quiz_app',
+    'auth_core',
+    'user_profile',
 ]
 
 MIDDLEWARE = [
@@ -123,3 +127,40 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+AUTHENTICATION_BACKENDS = [
+    'user_profile.auth_backends.EmailOrUsernameModelBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_CLASSES': [
+        # 'auth_core.throttling.APIKeyRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        # You can leave empty or set a default if needed
+    },
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'auth_core.authentication.APIKeyAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+}
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),     
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),        
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+# app informations
+BUSINESS_NAME = os.environ.get('BUSINESS_NAME')
+BUSINESS_LOGO = os.environ.get('BUSINESS_LOGO')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL')
+FROM_EMAIL = f"{BUSINESS_NAME} <{EMAIL_HOST_USER}>"
+
+# hmac key 
+HMAC_SECRET_KEY = os.environ.get("HMAC_SECRET_KEY")

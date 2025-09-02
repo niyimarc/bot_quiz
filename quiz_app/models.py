@@ -1,6 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from django.db.models import JSONField, Q
+from django.contrib.auth.models import User
 from .constant import STATUS_CHOICES, ACCESS_TYPE_CHOICES
 from mptt.models import MPTTModel
 
@@ -18,11 +19,11 @@ class QuizCategory(MPTTModel):
         return self.name
 
 class QuizManager(models.Manager):
-    def available_to_user(self, participant):
+    def available_to_user(self, user):
         return self.filter(
             Q(status='public') |
-            Q(participant=participant) |
-            Q(accesses__participant=participant)
+            Q(participant=user) |
+            Q(accesses__participant=user)
         ).distinct()
     
 class Quiz(models.Model):
@@ -32,7 +33,7 @@ class Quiz(models.Model):
     is_active = models.BooleanField(default=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='public')
     participant = models.ForeignKey(
-        "QuizParticipant", on_delete=models.SET_NULL, null=True, blank=True, related_name="quizzes"
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="quizzes"
     )
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
@@ -41,43 +42,29 @@ class Quiz(models.Model):
     def __str__(self):
         return self.name
     
-    def get_access_type(self, participant):
-        if self.participant == participant:
+    def get_access_type(self, user):
+        if self.participant == user:
             return "full_access"
-        access = self.accesses.filter(participant=participant).first()
+        access = self.accesses.filter(participant=user).first()
         return access.access_type if access else None
 
-    def is_accessible_by(self, participant):
+    def is_accessible_by(self, user):
         return (
             self.status == "public" or
-            self.participant == participant or
-            self.accesses.filter(participant=participant).exists()
+            self.participant == user or
+            self.accesses.filter(participant=user).exists()
         )
 
-    def can_participant_edit(self, participant):
-        if self.participant == participant:
+    def can_participant_edit(self, user):
+        if self.participant == user:
             return True
-        access = self.accesses.filter(participant=participant, access_type="full_access").first()
+        access = self.accesses.filter(participant=user, access_type="full_access").first()
         return bool(access)
-    
-class QuizParticipant(models.Model):
-    telegram_id = models.BigIntegerField(unique=True, db_index=True)
-    username = models.CharField(max_length=150, blank=True, null=True)
-    first_name = models.CharField(max_length=150, blank=True, null=True)
-    last_name = models.CharField(max_length=150, blank=True, null=True)
-    joined = models.DateTimeField(auto_now_add=True)
-    is_active = models.BooleanField(default=True, db_index=True)
-
-    def __str__(self):
-        return self.username or str(self.telegram_id)
-    class Meta:
-        verbose_name = "Participant"
-        verbose_name_plural = "Participants"
 
 class QuizAccess(models.Model):
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="accesses")
-    participant = models.ForeignKey(QuizParticipant, on_delete=models.CASCADE, related_name="accessible_quizzes")
-    granted_by = models.ForeignKey(QuizParticipant, on_delete=models.SET_NULL, null=True, blank=True, related_name="granted_accesses")
+    participant = models.ForeignKey(User, on_delete=models.CASCADE, related_name="accessible_quizzes")
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="granted_accesses")
     access_type = models.CharField(max_length=20, choices=ACCESS_TYPE_CHOICES, default="participate_access")
     granted_at = models.DateTimeField(auto_now_add=True)
 
@@ -90,7 +77,7 @@ class QuizAccess(models.Model):
         return f"{self.participant} has {self.access_type} to {self.quiz.name}"
 
 class QuizScore(models.Model):
-    participant = models.ForeignKey("QuizParticipant", on_delete=models.CASCADE, related_name="scores")
+    participant = models.ForeignKey(User, on_delete=models.CASCADE, related_name="scores")
     quiz = models.ForeignKey("Quiz", on_delete=models.CASCADE, related_name="scores")
     score = models.IntegerField(default=0)
     total_questions = models.IntegerField(default=0)
@@ -105,7 +92,7 @@ class QuizScore(models.Model):
         ordering = ['-attempt_time']
 
 class QuizSession(models.Model):
-    participant = models.ForeignKey(QuizParticipant, on_delete=models.CASCADE, related_name="sessions")
+    participant = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sessions")
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="sessions")
     score_obj = models.ForeignKey(QuizScore, on_delete=models.CASCADE, related_name="sessions")
     index = models.IntegerField(default=0)
@@ -131,7 +118,7 @@ class RetryQuizScore(models.Model):
         return f"Retry by {self.original_score.participant} on {self.original_score.quiz.name} – {self.score}/{self.total_questions}"
     
 class RetrySession(models.Model):
-    participant = models.ForeignKey(QuizParticipant, on_delete=models.CASCADE)
+    participant = models.ForeignKey(User, on_delete=models.CASCADE)
     retry = models.ForeignKey(RetryQuizScore, on_delete=models.CASCADE)
     active = models.BooleanField(default=True)
     expecting_answer = models.BooleanField(default=True)

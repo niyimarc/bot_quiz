@@ -4,7 +4,7 @@ from io import StringIO
 from django.core.cache import cache
 import hashlib
 import unicodedata
-from .models import RetrySession, QuizParticipant
+from .models import RetrySession
 
 def normalize(s):
     """Strip whitespace, quotes, and normalize unicode for fair comparison."""
@@ -76,35 +76,5 @@ def get_questions_from_sheet(url):
 
     return questions
 
-def clear_participant_retry_session(participant):
-    RetrySession.objects.filter(participant=participant).update(active=False, expecting_answer=False)
-
-def get_or_create_participant(data):
-    telegram_id = data.get("telegram_id")
-    if not telegram_id:
-        return None, False
-
-    defaults = {
-        "username": data.get("username"),
-        "first_name": data.get("first_name"),
-        "last_name": data.get("last_name"),
-        "is_active": True
-    }
-
-    participant, created = QuizParticipant.objects.get_or_create(
-        telegram_id=telegram_id, defaults=defaults
-    )
-
-    if not created:
-        # Check and update any changed fields
-        updated = False
-        for field in ["username", "first_name", "last_name"]:
-            new_val = data.get(field)
-            if new_val and getattr(participant, field) != new_val:
-                setattr(participant, field, new_val)
-                updated = True
-        if updated:
-            participant.save()
-
-    return participant, created
-
+def clear_participant_retry_session(user):
+    RetrySession.objects.filter(participant=user).update(active=False, expecting_answer=False)
