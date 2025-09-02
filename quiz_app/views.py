@@ -3,7 +3,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.db import IntegrityError
 from .models import Quiz, QuizParticipant, QuizScore, QuizSession, RetryQuizScore, RetrySession, QuizAccess, QuizCategory
-from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session, get_or_create_participant
+from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session
 import json
 import logging
 logger = logging.getLogger(__name__)
@@ -62,7 +62,8 @@ def continue_session(request):
     telegram_id = request.GET.get("telegram_id")
     if not telegram_id:
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
-    participant, _ = get_or_create_participant(request.GET)
+    
+    participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
     try:
         participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
     except QuizParticipant.DoesNotExist:
