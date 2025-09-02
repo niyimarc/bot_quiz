@@ -64,10 +64,10 @@ def continue_session(request):
         return JsonResponse({"error": "Missing telegram_id"}, status=400)
     
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
-    try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
-    except QuizParticipant.DoesNotExist:
-        return JsonResponse({"error": "Participant not found or inactive"}, status=404)
+    # try:
+    #     participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
+    # except QuizParticipant.DoesNotExist:
+    #     return JsonResponse({"error": "Participant not found or inactive"}, status=404)
 
     unfinished_scores = QuizScore.objects.filter(participant=participant, end_time__isnull=True)
     if not unfinished_scores.exists():
@@ -267,10 +267,10 @@ def get_participated_quizzes(request):
 
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
-    try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
-    except QuizParticipant.DoesNotExist:
-        return JsonResponse({"error": "Participant not found or inactive"}, status=404)
+    # try:
+    #     participant = QuizParticipant.objects.get(telegram_id=telegram_id, is_active=True)
+    # except QuizParticipant.DoesNotExist:
+    #     return JsonResponse({"error": "Participant not found or inactive"}, status=404)
 
     scores = QuizScore.objects.filter(participant=participant)
 
@@ -301,7 +301,7 @@ def retry_missed_question(request):
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+        # participant = QuizParticipant.objects.get(telegram_id=telegram_id)
         original_score = QuizScore.objects.get(id=original_score_id, participant=participant)
     except (QuizParticipant.DoesNotExist, QuizScore.DoesNotExist):
         return JsonResponse({"error": "Participant or quiz score not found"}, status=404)
@@ -423,10 +423,10 @@ def get_retryable_scores(request):
 
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
-    try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
-    except QuizParticipant.DoesNotExist:
-        return JsonResponse({"error": "Participant not found"}, status=404)
+    # try:
+    #     participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+    # except QuizParticipant.DoesNotExist:
+    #     return JsonResponse({"error": "Participant not found"}, status=404)
 
     retryable = []
 
@@ -454,7 +454,7 @@ def retry_session_status(request):
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
     try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+        # participant = QuizParticipant.objects.get(telegram_id=telegram_id)
         session = RetrySession.objects.filter(participant=participant, active=True, expecting_answer=True).latest("updated_at")
 
         return JsonResponse({
@@ -473,10 +473,10 @@ def clear_retry_session(request):
 
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
-    try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
-    except QuizParticipant.DoesNotExist:
-        return JsonResponse({"error": "Participant not found"}, status=404)
+    # try:
+    #     participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+    # except QuizParticipant.DoesNotExist:
+    #     return JsonResponse({"error": "Participant not found"}, status=404)
 
     RetrySession.objects.filter(participant=participant).update(active=False, expecting_answer=False)
     return JsonResponse({"status": "cleared"})
@@ -509,10 +509,10 @@ def add_quiz(request):
 
         participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
-        try:
-            participant = QuizParticipant.objects.get(telegram_id=telegram_id)
-        except QuizParticipant.DoesNotExist:
-            return JsonResponse({"error": "Participant not found"}, status=404)
+        # try:
+        #     participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+        # except QuizParticipant.DoesNotExist:
+        #     return JsonResponse({"error": "Participant not found"}, status=404)
 
         if Quiz.objects.filter(name=name).exists():
             return JsonResponse({"error": "A quiz with this name already exists."}, status=400)
@@ -570,10 +570,10 @@ def get_my_quizzes(request):
 
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
-    try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
-    except QuizParticipant.DoesNotExist:
-        return JsonResponse({"error": "Participant not found"}, status=404)
+    # try:
+    #     participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+    # except QuizParticipant.DoesNotExist:
+    #     return JsonResponse({"error": "Participant not found"}, status=404)
 
     quizzes = Quiz.objects.filter(participant=participant).order_by("-id")
 
@@ -633,10 +633,10 @@ def update_quiz_status(request):
 
     participant, _ = QuizParticipant.objects.get_or_create(telegram_id=telegram_id)
 
-    try:
-        participant = QuizParticipant.objects.get(telegram_id=telegram_id)
-    except QuizParticipant.DoesNotExist:
-        return JsonResponse({"error": "Participant not found"}, status=404)
+    # try:
+    #     participant = QuizParticipant.objects.get(telegram_id=telegram_id)
+    # except QuizParticipant.DoesNotExist:
+    #     return JsonResponse({"error": "Participant not found"}, status=404)
 
     try:
         quiz = Quiz.objects.get(id=quiz_id, participant=participant)
