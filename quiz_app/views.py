@@ -52,17 +52,17 @@ class GetAccessibleQuizzesView(PrivateUserViewMixin, ListAPIView):
 
 class ContinueSessionView(PrivateUserViewMixin, APIView):
     def get(self, request):
-        user = request.GET.get("user")
+        user = request.user 
         if not user:
             return JsonResponse({"error": "Missing user"}, status=400)
 
-        unfinished_scores = QuizScore.objects.filter(user=user, end_time__isnull=True)
+        unfinished_scores = QuizScore.objects.filter(participant=user, end_time__isnull=True)
         if not unfinished_scores.exists():
             return JsonResponse({"error": "No unfinished quizzes found."}, status=404)
 
         options = []
         for score in unfinished_scores:
-            session = QuizSession.objects.filter(score_obj=score, user=user, active=True).first()
+            session = QuizSession.objects.filter(score_obj=score, participant=user, active=True).first()
             if session:
                 total = len(session.questions)
                 index = session.index + 1
@@ -77,6 +77,35 @@ class ContinueSessionView(PrivateUserViewMixin, APIView):
             "options": options
         })
 
+class ResumeQuizView(PrivateUserViewMixin, APIView):
+    def get(self, request, session_id):
+        user = request.user
+
+        try:
+            session = QuizSession.objects.get(id=session_id, participant=user, active=True)
+        except QuizSession.DoesNotExist:
+            return Response({"error": "Active session not found"}, status=404)
+
+        all_questions = session.questions
+        index = session.index  # current question index
+
+        # Sanitize all questions (optional: only number, text, options)
+        sanitized_questions = [
+            {
+                "number": q["number"],
+                "text": q["text"],
+                "options": q["options"],
+            } for q in all_questions
+        ]
+
+        return Response({
+            "session_id": session.id,
+            "quiz_name": session.quiz.name,
+            "total_questions": len(all_questions),
+            "questions": sanitized_questions,  # full list
+            "current_question_index": index,    # JS will use this
+            "progress": f"Question {index + 1} of {len(all_questions)}"
+        })
 
 class StartQuizView(PrivateUserViewMixin, APIView):
     def post(self, request):
@@ -229,128 +258,125 @@ class ParticipatedQuizzesView(PrivateUserViewMixin, APIView):
         serializer = QuizScoreSerializer(scores, many=True)
         return Response(serializer.data)
 
-class RetryMissedQuestionView(PrivateUserViewMixin, APIView):
+class StartRetryView(PrivateUserViewMixin, APIView):
     def post(self, request):
         user = request.user
-        original_score_id = request.data.get("score_id")
-        answer = request.data.get("answer")
+        score_id = request.data.get("score_id")
 
-        if not user or not original_score_id:
-            return JsonResponse({"error": "Missing user or score_id"}, status=400)
+        if not user or not score_id:
+            return Response({"error": "Missing user or score_id"}, status=400)
 
         try:
-            original_score = QuizScore.objects.get(id=original_score_id, user=user)
+            original_score = QuizScore.objects.get(id=score_id, participant=user)
         except QuizScore.DoesNotExist:
-            return JsonResponse({"error": "User or quiz score not found"}, status=404)
+            return Response({"error": "Quiz score not found"}, status=404)
 
+        missed = original_score.missed_questions or []
+        if not missed:
+            return Response({"error": "No missed questions to retry"}, status=400)
+
+        # Convert old/new formats to 0-based indexes
+        missed_indexes = [
+            i-1 if isinstance(i, int) else i["index"]-1
+            for i in missed
+        ]
         all_questions = get_questions_from_sheet(original_score.quiz.sheet_url)
-        raw_missed = original_score.missed_questions or []
+        retry_questions = [all_questions[i] for i in missed_indexes]
 
-        # Support both old (int) and new (dict) formats
-        missed_questions = []
-        for item in raw_missed:
-            if isinstance(item, int) and item > 0:
-                missed_questions.append(item - 1)  # old format (1-based to 0-based)
-            elif isinstance(item, dict) and "index" in item and isinstance(item["index"], int):
-                missed_questions.append(item["index"] - 1)  # new format
+        # Create retry session
+        retry = RetryQuizScore.objects.create(
+            original_score=original_score,
+            missed_questions=missed_indexes,
+            total_questions=len(missed_indexes),
+            score=0,
+            index=0
+        )
+        # Clear any existing retry session
+        RetrySession.objects.filter(participant=user).update(active=False, expecting_answer=False)
+        RetrySession.objects.create(
+            participant=user,
+            retry=retry,
+            active=True,
+            expecting_answer=True
+        )
 
-        if any(i >= len(all_questions) or i < 0 for i in missed_questions):
-            return JsonResponse({
-                "error": "⚠️ The quiz content has changed since your last attempt. Retry session closed."
-            }, status=400)
+        # Sanitize questions for frontend
+        sanitized_questions = [
+            {"number": q["number"], "text": q["text"], "options": q["options"]}
+            for q in retry_questions
+        ]
 
-        # Check for an active retry session first
-        retry_session = RetrySession.objects.filter(user=user, active=True).first()
-        if retry_session:
-            retry = retry_session.retry
-        else:
-            if not missed_questions:
-                return JsonResponse({"error": "🎉 No missed questions to retry!"}, status=400)
+        return Response({
+            "session_id": retry.id,  # use same key as StartQuiz/ResumeQuiz
+            "score_id": original_score.id,
+            "quiz_name": original_score.quiz.name,
+            "questions": sanitized_questions,
+            "total_questions": len(sanitized_questions),
+            "current_question_index": 0,
+            "progress": f"Question 1 of {len(sanitized_questions)}"
+        })
 
-            retry = RetryQuizScore.objects.create(
-                original_score=original_score,
-                missed_questions=missed_questions,
-                total_questions=len(missed_questions),
-                score=0,
-                index=0
-            )
-            clear_participant_retry_session(user)
-            RetrySession.objects.create(
-                user=user,
-                retry=retry,
-                active=True,
-                expecting_answer=True
-            )
+class SubmitRetryAnswerView(PrivateUserViewMixin, APIView):
+    def post(self, request):
+        user = request.user
+        session_id = request.data.get("session_id")
+        answer = request.data.get("answer")
+        question_index = request.data.get("question_index")
 
-        # Return the next question if no answer was submitted
-        if not answer:
-            current_index = retry.missed_questions[retry.index]
-            current_question = all_questions[current_index]
-            return JsonResponse({
-                "type": "question",
-                "message": current_question["text"],
-                "options": current_question["options"],
-                "progress": f"Retry Question {retry.index + 1} of {retry.total_questions}",
-                "retry_id": retry.id,
-                "score_id": original_score.id
-            })
+        try:
+            session = RetrySession.objects.get(participant=user, active=True)
+        except RetrySession.DoesNotExist:
+            return Response({"error": "Retry session not found"}, status=404)
 
-        # Evaluate answer
-        current_index = retry.missed_questions[retry.index]
-        current_question = all_questions[current_index]
+        retry = session.retry
+        all_questions = get_questions_from_sheet(retry.original_score.quiz.sheet_url)
+        retry_questions = [all_questions[i] for i in retry.missed_questions]
 
-        normalized_answer = normalize(answer)
-        correct_answer = normalize(current_question["correct"])
-        normalized_options = [normalize(opt) for opt in current_question["options"]]
+        if question_index >= len(retry_questions):
+            return Response({"error": "Invalid question index"}, status=400)
 
-        if normalized_answer not in normalized_options:
-            return JsonResponse({
-                "error": "❗ Your answer is not in the list of options.",
-                "retry_id": retry.id
-            })
+        question = retry_questions[question_index]
 
-        question_number = retry.index + 1
-        formatted_options = "\n".join(current_question["options"])
-        feedback = f"*Q{question_number}*: {current_question['text']}\n{formatted_options}\n"
-        feedback += f"Your Answer: {answer.strip()}\n"
+        # Ensure correct key
+        correct_answer = question.get("correct_answer") or question.get("correct") or question.get("answer")
+        if correct_answer is None:
+            return Response({"error": "Question missing correct answer"}, status=500)
 
-        if normalized_answer.startswith(correct_answer):
-            feedback += "✅ Correct!"
-            retry.score += 1
-        else:
-            feedback += f"❌ Incorrect. Correct answer is: {current_question['correct']}"
+        # Normalize for comparison
+        normalized_answer = answer.strip().upper()
+        normalized_correct = correct_answer.strip().upper()
 
+        is_correct = normalized_answer.startswith(normalized_correct)
+
+        # Update retry score and index
         retry.index += 1
+        if not hasattr(retry, "missed_questions_details"):
+            retry.missed_questions_details = []
+
+        if not is_correct:
+            retry.missed_questions_details.append({
+                "index": question_index,
+                "question": question["text"]
+            })
+        else:
+            retry.score += 1
+
         retry.save()
 
-        # If session complete
-        if retry.index >= retry.total_questions:
-            retry.end_time = timezone.now()
-            retry.save()
-            clear_participant_retry_session(user)
-            return JsonResponse({
-                "type": "complete",
-                "feedback": feedback,
-                "final_score": retry.score,
-                "total_questions": retry.total_questions,
-                "message": f"🎉 Congratulations on completing your retry session!\n\n"
-                           f"✅ Final Score: {retry.score}/{retry.total_questions}\n"
-                           f"📚 Keep practicing to improve even more!"
-            })
+        # End session if finished
+        finished = retry.index >= len(retry_questions)
+        if finished:
+            session.active = False
+            session.expecting_answer = False
+            session.save()
 
-        # Otherwise next question
-        next_index = retry.missed_questions[retry.index]
-        next_question = all_questions[next_index]
-
-        return JsonResponse({
-            "type": "feedback",
-            "feedback": feedback,
-            "next_question": {
-                "text": next_question["text"],
-                "options": next_question["options"],
-            },
-            "progress": f"Retry Question {retry.index + 1} of {retry.total_questions}",
-            "retry_id": retry.id
+        return Response({
+            "type": "feedback" if not finished else "complete",
+            "correct": is_correct,
+            "correct_answer": correct_answer,
+            "next_question_index": retry.index,
+            "finished": finished,
+            "question_text": question["text"],
         })
 
 class RetryableScoresView(PrivateUserViewMixin, APIView):
@@ -360,39 +386,53 @@ class RetryableScoresView(PrivateUserViewMixin, APIView):
             return JsonResponse({"error": "Missing user"}, status=400)
 
         retryable = []
-
-        scores = QuizScore.objects.filter(user=user).order_by("-attempt_time")
+        scores = QuizScore.objects.filter(participant=user).order_by("-attempt_time")
         for score in scores:
             missed = score.missed_questions or []
             if not missed:
-                continue  # No missed questions
+                continue
 
             retryable.append({
-                "quiz_name": score.quiz.name,
                 "score_id": score.id,
+                "quiz_name": score.quiz.name,
                 "missed_count": len(missed),
             })
 
-        return JsonResponse(retryable, safe=False)
+        return JsonResponse({
+            "message": "📚 Quizzes with missed questions available for retry:",
+            "options": retryable
+        })
 
-class RetrySessionStatusView(PrivateUserViewMixin, APIView):
-    def get(self, request):
+class RetrySessionView(PrivateUserViewMixin, APIView):
+    def get(self, request, session_id):
         user = request.user
         if not user:
-            return JsonResponse({"error": "Missing user"}, status=400)
+            return Response({"error": "Missing user"}, status=400)
 
         try:
-            session = RetrySession.objects.filter(
-                user=user, active=True, expecting_answer=True
-            ).latest("updated_at")
+            retry = RetryQuizScore.objects.get(id=session_id, retrysession__participant=user, retrysession__active=True)
+        except RetryQuizScore.DoesNotExist:
+            return Response({"error": "Active retry session not found"}, status=404)
 
-            return JsonResponse({
-                "score_id": session.retry.original_score.id,
-                "retry_id": session.retry.id,
-                "expecting_answer": session.expecting_answer,
-            })
-        except RetrySession.DoesNotExist:
-            return JsonResponse({})
+        all_questions = get_questions_from_sheet(retry.original_score.quiz.sheet_url)
+        missed_indexes = retry.missed_questions
+        retry_questions = [all_questions[i] for i in missed_indexes]
+
+        # Current question
+        index = retry.index
+        sanitized_questions = [
+            {"number": q["number"], "text": q["text"], "options": q["options"]}
+            for q in retry_questions
+        ]
+
+        return Response({
+            "session_id": retry.id,
+            "quiz_name": retry.original_score.quiz.name,
+            "questions": sanitized_questions,
+            "total_questions": len(sanitized_questions),
+            "current_question_index": index,
+            "progress": f"Question {index + 1} of {len(sanitized_questions)}"
+        })
     
 class ClearRetrySessionView(PrivateUserViewMixin, APIView):
     def get(self, request):
