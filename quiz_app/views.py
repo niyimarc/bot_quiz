@@ -1,13 +1,16 @@
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework.views import APIView
+from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
 from auth_core.views import PrivateUserViewMixin, PublicViewMixin
 from .serializers import QuizSerializer, QuizScoreSerializer, QuizCategorySerializer, QuizAccessSerializer
 from .models import Quiz, QuizScore, QuizSession, RetryQuizScore, RetrySession, QuizAccess, QuizCategory
 from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session
+from .pagination import QuizPagination
+from django.shortcuts import get_object_or_404
 import json
 import logging
 logger = logging.getLogger(__name__)
@@ -16,31 +19,36 @@ class CategoriesWithQuizzesView(PrivateUserViewMixin, APIView):
     def get(self, request):
         user = request.user
         quizzes = Quiz.objects.available_to_user(user)
-        category_ids = quizzes.values_list('category__id', flat=True).distinct()
-        categories = QuizCategory.objects.filter(id__in=category_ids)
+        categories = (
+            QuizCategory.objects
+            .filter(id__in=quizzes.values_list("category", flat=True))
+            .annotate(quiz_count=Count("quiz", filter=Q(quiz__in=quizzes)))
+        )
         serializer = QuizCategorySerializer(categories, many=True)
         return Response({"categories": serializer.data})
 
-class QuizzesByCategoryView(PrivateUserViewMixin, APIView):
-    def get(self, request, *args, **kwargs):
-        user = request.user
-        category_id = request.GET.get("category_id")
-        if not category_id:
-            return Response({"error": "category_id is required"}, status=400)
+class GetAccessibleQuizzesView(PrivateUserViewMixin, ListAPIView):
+    serializer_class = QuizSerializer
+    pagination_class = QuizPagination
 
-        quizzes = Quiz.objects.filter(is_active=True, category__id=category_id).distinct()
-        accessible = [q.name for q in quizzes if q.is_accessible_by(user)]
-        return Response(accessible)
+    def get_queryset(self):
+        user = self.request.user
+        category_id = self.request.GET.get("category_id")
+        search = self.request.GET.get("search", "").strip()
 
-class GetQuizzesView(PrivateUserViewMixin, APIView):
-    def get(self, request, *args, **kwargs):
-        category_id = request.GET.get("category_id")
-        if not category_id:
-            return Response({"error": "category_id is required"}, status=400)
+        queryset = Quiz.objects.available_to_user(user).filter(is_active=True)
 
-        quizzes = Quiz.objects.filter(is_active=True, category_id=category_id)
-        data = [{"id": q.id, "name": q.name} for q in quizzes]
-        return Response(data)
+        if category_id:
+            queryset = queryset.filter(category__id=category_id)
+
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(category__name__icontains=search)
+            )
+
+        return queryset.distinct()
+
 
 class ContinueSessionView(PrivateUserViewMixin, APIView):
     def get(self, request):
@@ -69,158 +77,151 @@ class ContinueSessionView(PrivateUserViewMixin, APIView):
             "options": options
         })
 
-class ProcessMessageView(PrivateUserViewMixin, APIView):
+
+class StartQuizView(PrivateUserViewMixin, APIView):
     def post(self, request):
+        user = request.user
+        quiz_id = request.data.get("quiz_id")
+
+        if not quiz_id:
+            return Response({"error": "quiz_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
-            user = request.data.get("user")
-            text = request.data.get("text")
-            explicit_session_id = request.data.get("session_id")  # <- NEW
+            quiz = Quiz.objects.get(id=quiz_id, is_active=True)
+        except Quiz.DoesNotExist:
+            return Response({"error": "Quiz not found or inactive"}, status=status.HTTP_404_NOT_FOUND)
 
-            if not user or not text:
-                return JsonResponse({"error": "Missing user or text"}, status=400)
-
-            # Handle RESUME__<session_id>
-            if text.startswith("RESUME__"):
-                session_id = text.replace("RESUME__", "").split("|")[0].strip()
-                try:
-                    session = QuizSession.objects.get(id=session_id, participant=user, active=True)
-                except QuizSession.DoesNotExist:
-                    return JsonResponse({"error": "Session not found or already completed."})
-
-                if session.index >= len(session.questions):
-                    return JsonResponse({"error": "This session is already complete. Use /start to begin a new quiz."})
-
-                question = session.questions[session.index]
-                return JsonResponse({
-                    "type": "question",
-                    "message": question["text"],
-                    "options": question["options"],
-                    "progress": f"Question {session.index + 1} of {len(session.questions)}",
-                    "session_id": session.id
-                })
-
-            # Handle new quiz start
-            quiz = Quiz.objects.filter(name=text, is_active=True).first()
-            if quiz:
-                # Clean up stale retry sessions
-                RetrySession.objects.filter(participant=user).update(active=False, expecting_answer=False)
-                if not quiz.is_accessible_by(user):
-                    return JsonResponse({"error": "This quiz is private and you do not have access."}, status=403)
-
-                questions = get_questions_from_sheet(quiz.sheet_url)
-                score = QuizScore.objects.create(participant=user, quiz=quiz, total_questions=len(questions))
-                session = QuizSession.objects.create(
-                    participant=user,
-                    quiz=quiz,
-                    score_obj=score,
-                    questions=questions,
-                )
-
-                current_question = session.questions[session.index]
-                return JsonResponse({
-                    "type": "question",
-                    "message": current_question["text"],
-                    "options": current_question["options"],
-                    "progress": f"Question 1 of {len(questions)}",
-                    "session_id": session.id
-                })
-
-            # Continue existing session
-            session = None
-            if explicit_session_id:
-                session = QuizSession.objects.filter(id=explicit_session_id, participant=user, active=True).first()
-            if not session:
-                session = QuizSession.objects.filter(participant=user, active=True).first()
-
-            if not session:
-                return JsonResponse({"error": "No active session."}, status=404)
-
-            # Completed session
-            if session.index >= len(session.questions):
-                session.active = False
-                session.score_obj.end_time = timezone.now()
-                session.save()
-                session.score_obj.save()
-                quiz_name = session.quiz.name if session.quiz else "Quiz"
-                return JsonResponse({
-                    "type": "feedback",
-                    "final_message": f"🎉 You've completed the *{quiz_name}* quiz!\n\n"
-                                     f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n"
-                                     "Use /start to try a new quiz or /continue if you left one unfinished.",
-                    "final_score": session.score,
-                    "total_questions": len(session.questions),
-                    "progress": f"Completed {session.index} of {len(session.questions)}",
-                    "session_id": session.id
-                })
-
-            # Evaluate current question
-            question = session.questions[session.index]
-            user_input = normalize(text)
-            correct_answer = normalize(question["correct"])
-            options = question["options"]
-            normalized_options = [normalize(opt) for opt in options]
-
-            if user_input not in normalized_options:
-                return JsonResponse({
-                    "error": "❗ The answer you provided is not in the list of options.\n\n"
-                             "Use /continue to resume your quiz properly.",
-                    "session_id": session.id
-                })
-
-            formatted_options = "\n".join(options)
-            full_feedback = (
-                f"*Q{session.index + 1}*: {question['text']}\n{formatted_options}\n"
-                f"Your Answer: {text.strip()}\n"
+        # Ensure user has access
+        if not quiz.is_accessible_by(user):
+            return Response(
+                {"error": "This quiz is private and you do not have access."},
+                status=status.HTTP_403_FORBIDDEN
             )
-            is_correct = user_input.startswith(correct_answer)
-            full_feedback += "✅ Correct!" if is_correct else f"❌ Incorrect. Correct Answer: {correct_answer}"
 
-            if is_correct:
-                session.score += 1
-                session.score_obj.score += 1
-            else:
-                if not isinstance(session.score_obj.missed_questions, list):
-                    session.score_obj.missed_questions = []
-                session.score_obj.missed_questions.append({
-                    "index": session.index + 1,
-                    "selected": text.strip()
-                })
+        # Clean up stale retry sessions
+        RetrySession.objects.filter(participant=user).update(active=False, expecting_answer=False)
 
-            session.index += 1
+        # Load questions
+        all_questions = get_questions_from_sheet(quiz.sheet_url)
+
+        # Create score and session
+        score = QuizScore.objects.create(
+            participant=user,
+            quiz=quiz,
+            total_questions=len(all_questions),
+            score=0,
+            start_time=timezone.now()
+        )
+        session = QuizSession.objects.create(
+            participant=user,
+            quiz=quiz,
+            score_obj=score,
+            questions=all_questions,  # store full set including correct
+            index=0,
+            active=True,
+        )
+
+        sanitized_questions = [
+            {
+                "number": q["number"],
+                "text": q["text"],
+                "options": q["options"],
+            }
+            for q in all_questions
+        ]
+
+        return Response({
+            "session_id": session.id,
+            "quiz_name": quiz.name,
+            "total_questions": len(all_questions),
+            "questions": sanitized_questions,  # frontend will cache these
+            "progress": f"Question 1 of {len(all_questions)}",
+        }, status=status.HTTP_201_CREATED)
+
+
+class SubmitQuizAnswerView(PrivateUserViewMixin, APIView):
+    def post(self, request):
+        user = request.user
+        session_id = request.data.get("session_id")
+        answer = request.data.get("answer")
+        # print(f"Submitted Answer: {answer}")
+        if not session_id:
+            return Response({"error": "session_id is required"}, status=400)
+
+        try:
+            session = QuizSession.objects.get(id=session_id, participant=user, active=True)
+        except QuizSession.DoesNotExist:
+            return Response({"error": "Active session not found"}, status=404)
+
+        all_questions = session.questions  # already stored at start
+        if session.index >= len(all_questions):
+            return Response({"error": "Quiz already completed"}, status=400)
+
+        current_question = all_questions[session.index]
+
+        if not answer:
+            return Response({
+                "type": "question",
+                "message": current_question["text"],
+                "options": current_question["options"],
+                "progress": f"Question {session.index + 1} of {len(all_questions)}",
+                "session_id": session.id,
+            })
+
+        # Normalize for comparison
+        normalized_answer = answer.strip().upper()
+        correct_answer = current_question["correct"].strip().upper()
+        # print(f"Correct Answer: {correct_answer}")
+        feedback = f"Q{session.index + 1}: {current_question['text']}\nYour Answer: {answer}\n"
+
+        if normalized_answer.startswith(correct_answer):
+            session.score += 1
+            session.score_obj.score = session.score
+            feedback += "✅ Correct!"
+        else:
+            # Record missed question
+            session.score_obj.missed_questions.append({
+                "index": session.index,
+                "question": current_question["text"]
+            })
+            feedback += f"❌ Incorrect. Correct answer: {current_question['correct']}"
+
+        session.index += 1
+        session.score_obj.save()
+        session.save()
+
+        # If finished
+        if session.index >= len(all_questions):
+            session.active = False
+            session.score_obj.end_time = timezone.now()
             session.score_obj.save()
             session.save()
 
-            # Completed after this answer
-            if session.index >= len(session.questions):
-                session.active = False
-                session.score_obj.end_time = timezone.now()
-                session.save()
-                session.score_obj.save()
-                quiz_name = session.quiz.name if session.quiz else "Quiz"
-                return JsonResponse({
-                    "type": "feedback",
-                    "feedback": full_feedback,
-                    "final_message": f"🎉 You've completed the *{quiz_name}* quiz!\n\n"
-                                     f"📊 Your final score: *{session.score}* out of *{len(session.questions)}*\n\n"
-                                     "Use /start to try a new quiz or /continue if you left one unfinished.",
-                    "final_score": session.score,
-                    "total_questions": len(session.questions),
-                    "progress": f"Completed {session.index} of {len(session.questions)}",
-                    "session_id": session.id
-                })
-
-            return JsonResponse({
-                "type": "feedback",
-                "feedback": full_feedback,
-                "question": session.questions[session.index],
-                "progress": f"Question {session.index + 1} of {len(session.questions)}",
-                "session_id": session.id
+            return Response({
+                "type": "complete",
+                "final_score": session.score,
+                "total_questions": len(all_questions),
+                "message": f"🎉 You completed the quiz!\nScore: {session.score}/{len(all_questions)}",
+                "correct_answer": current_question["correct"],  # add this
+                "correct": normalized_answer.startswith(correct_answer),
             })
 
-        except Exception as e:
-            logger.exception("❌ CRASH in process_message")
-            return JsonResponse({"error": "Internal Server Error"}, status=500)
-        
+        # Otherwise next question
+        next_question = all_questions[session.index]
+        return Response({
+            "type": "feedback",
+            "feedback": feedback,
+            "next_question": {
+                "text": next_question["text"],
+                "options": next_question["options"],
+            },
+            "correct_answer": current_question["correct"],
+            "correct": normalized_answer.startswith(correct_answer),
+            "progress": f"Question {session.index + 1} of {len(all_questions)}",
+            "session_id": session.id,
+        })
+
+    
 class ParticipatedQuizzesView(PrivateUserViewMixin, APIView):
     def get(self, request):
         user = request.user

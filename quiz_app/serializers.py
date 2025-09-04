@@ -2,9 +2,10 @@ from rest_framework import serializers
 from .models import Quiz, QuizScore, QuizSession, QuizCategory, QuizAccess, RetryQuizScore
 
 class QuizCategorySerializer(serializers.ModelSerializer):
+    quiz_count = serializers.IntegerField(read_only=True)
     class Meta:
         model = QuizCategory
-        fields = ["id", "name"]
+        fields = ["id", "name", "quiz_count"]
 
 class QuizSerializer(serializers.ModelSerializer):
     category = QuizCategorySerializer(many=True, read_only=True)
@@ -12,13 +13,14 @@ class QuizSerializer(serializers.ModelSerializer):
     total_attempts = serializers.SerializerMethodField()
     last_attempt_time = serializers.SerializerMethodField()
     retry_count = serializers.SerializerMethodField()
+    total_questions = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = [
             "id", "name", "sheet_url", "status", "is_active", "created_date",
             "category", "total_participants", "total_attempts",
-            "last_attempt_time", "retry_count"
+            "last_attempt_time", "retry_count", "total_questions"
         ]
 
     def get_total_participants(self, obj):
@@ -34,6 +36,14 @@ class QuizSerializer(serializers.ModelSerializer):
     def get_retry_count(self, obj):
         return RetryQuizScore.objects.filter(original_score__quiz=obj).count()
 
+    def get_total_questions(self, obj):
+        from .utils import get_questions_from_sheet
+        try:
+            questions = get_questions_from_sheet(obj.sheet_url)
+            return len(questions)
+        except Exception:
+            return 0
+        
 class QuizAccessSerializer(serializers.ModelSerializer):
     participant_username = serializers.CharField(source="participant.username", read_only=True)
     granted_by_username = serializers.CharField(source="granted_by.username", read_only=True)

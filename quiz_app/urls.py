@@ -1,9 +1,9 @@
 from django.urls import path
 from .views import (
-    GetQuizzesView, 
     ContinueSessionView, 
-    ProcessMessageView, 
     ParticipatedQuizzesView, 
+    StartQuizView,
+    SubmitQuizAnswerView,
     RetryMissedQuestionView, 
     RetryableScoresView, 
     RetrySessionStatusView,
@@ -17,13 +17,13 @@ from .views import (
     QuizAccessListView,
     ListCategoriesView,
     CategoriesWithQuizzesView,
-    QuizzesByCategoryView
+    GetAccessibleQuizzesView,
     )
 
 urlpatterns = [
-    path('quiz/get_quizzes/', GetQuizzesView.as_view()),
     path("quiz/continue_session/", ContinueSessionView.as_view()),
-    path("quiz/process_message/", ProcessMessageView.as_view()),
+    path("quiz/start_quiz/", StartQuizView.as_view()),
+    path("quiz/submit_quiz_answer/", SubmitQuizAnswerView.as_view()),
     path("quiz/get_participated_quizzes/", ParticipatedQuizzesView.as_view()),
     path("quiz/retry_missed_question/", RetryMissedQuestionView.as_view()),
     path("quiz/get_retryable_scores/", RetryableScoresView.as_view()),
@@ -38,5 +38,5 @@ urlpatterns = [
     path("quiz/get_quiz_access_list/", QuizAccessListView.as_view()),
     path("quiz/list_categories/", ListCategoriesView.as_view()),
     path("quiz/categories_with_quizzes/", CategoriesWithQuizzesView.as_view()),
-    path("quiz/quizzes_by_category/", QuizzesByCategoryView.as_view()),
+    path("quiz/get_accessible_quizzes/", GetAccessibleQuizzesView.as_view()),
 ]
