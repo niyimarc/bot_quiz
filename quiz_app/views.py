@@ -1,6 +1,7 @@
 from django.http import JsonResponse
 from django.db.models import Count, Q
 from django.utils import timezone
+from django.contrib.auth.models import User
 from rest_framework.views import APIView
 from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
@@ -452,41 +453,91 @@ class ListCategoriesView(PrivateUserViewMixin, APIView):
 class AddQuizView(PrivateUserViewMixin, APIView):
     def post(self, request):
         data = request.data
-        user = request.user
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                return Response({"error": "Invalid JSON"}, status=400)
+        else:
+            print("Data is already parsed:", data, type(data))
 
+        user = request.user
         name = data.get("name")
         sheet_url = data.get("sheet_url")
         status = data.get("status", "public").lower()
-        category_ids = data.get("category_ids", [])
 
+        # Normalize category_ids
+        raw_category_ids = data.get("category_ids", [])
+
+        if isinstance(raw_category_ids, (str, int)):
+            raw_category_ids = [raw_category_ids]
+        try:
+            category_ids = [int(cid) for cid in raw_category_ids if cid]
+        except ValueError:
+            return Response({"error": "Invalid category_ids"}, status=400)
+
+        # Validate required fields
         if not all([name, sheet_url]):
             return Response({"error": "Missing required fields"}, status=400)
 
         if status not in ["public", "private"]:
             return Response({"error": "Invalid status. Must be 'public' or 'private'"}, status=400)
 
+        # Check duplicate quiz name
         if Quiz.objects.filter(name=name).exists():
             return Response({"error": "A quiz with this name already exists."}, status=400)
+        
+        if Quiz.objects.filter(sheet_url=sheet_url).exists():
+            return Response({"error": "A quiz with this sheet URL already exists."}, status=400)
 
-        from .utils import get_questions_from_sheet
+        # Fetch questions from sheet
         try:
             questions = get_questions_from_sheet(sheet_url)
         except ValueError as e:
             return Response({"error": str(e)}, status=400)
 
-        quiz = Quiz.objects.create(name=name, sheet_url=sheet_url, status=status, participant=user, is_active=True)
+        # Create quiz
+        quiz = Quiz.objects.create(
+            name=name,
+            sheet_url=sheet_url,
+            status=status,
+            participant=user,
+            is_active=True
+        )
+
+        # Assign categories safely
         if category_ids:
-            quiz.category.set(category_ids)
+            valid_ids = list(quiz.category.model.objects.filter(id__in=category_ids).values_list('id', flat=True))
+            if valid_ids:
+                quiz.category.set(valid_ids)
 
         serializer = QuizSerializer(quiz)
-        return Response({"message": f"✅ Quiz '{quiz.name}' created successfully.", "quiz": serializer.data})
+        return Response({
+            "message": f"✅ Quiz '{quiz.name}' created successfully.",
+            "quiz": serializer.data
+        })
 
-class MyQuizzesView(PrivateUserViewMixin, APIView):
-    def get(self, request):
-        user = request.user
-        quizzes = Quiz.objects.filter(participant=user).order_by("-id")
-        serializer = QuizSerializer(quizzes, many=True)
-        return Response(serializer.data)
+class MyQuizzesView(PrivateUserViewMixin, ListAPIView):
+    serializer_class = QuizSerializer
+    pagination_class = QuizPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        category_id = self.request.GET.get("category_id")
+        search = self.request.GET.get("search", "").strip()
+
+        queryset = Quiz.objects.filter(participant=user).order_by("-id")
+
+        if category_id:
+            queryset = queryset.filter(category__id=category_id)
+
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(category__name__icontains=search)
+            )
+
+        return queryset.distinct()
 
 class UpdateQuizStatusView(PrivateUserViewMixin, APIView):
     def post(self, request):
@@ -589,13 +640,10 @@ class GrantQuizAccessView(PrivateUserViewMixin, APIView):
                 return JsonResponse({"error": "🚫 You don't have permission to manage access for this quiz."}, status=403)
 
             # Resolve or create target
-            target = None
-            target = Quiz.objects.filter(participant__username__iexact=target_username).first()
+            # Resolve or create target user
+            target = User.objects.filter(username__iexact=target_username).first()
             if not target:
-                # create target user placeholder if necessary
-                from django.contrib.auth.models import User
-                target_user = User.objects.create(username=target_username)
-                target = target_user
+                target = User.objects.create(username=target_username)
 
             if quiz.participant == target:
                 return JsonResponse({
@@ -644,6 +692,10 @@ class QuizAccessListView(PrivateUserViewMixin, APIView):
             quiz = Quiz.objects.get(id=quiz_id)
         except Quiz.DoesNotExist:
             return Response({"error": "Quiz not found"}, status=404)
+
+        # Only quiz owner can view access list
+        if not (quiz.participant == request.user or quiz.get_access_type(request.user) == "full_access"):
+            return Response({"error": "Not authorized"}, status=403)
 
         accesses = quiz.accesses.select_related("participant", "granted_by")
         serializer = QuizAccessSerializer(accesses, many=True)

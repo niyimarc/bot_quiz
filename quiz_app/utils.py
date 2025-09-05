@@ -23,13 +23,13 @@ def get_questions_from_sheet(url):
 
     cached_questions = cache.get(cache_key)
     if cached_questions:
-        print("Loaded questions from cache.")
+        # print("Loaded questions from cache.")
         return cached_questions
 
     try:
         response = requests.get(url, timeout=20)
         response.raise_for_status()
-        print("Successfully fetched sheet.")
+        # print("Successfully fetched sheet.")
     except requests.exceptions.RequestException as e:
         raise ValueError(f"❌ Failed to load questions sheet: {e}")
 
