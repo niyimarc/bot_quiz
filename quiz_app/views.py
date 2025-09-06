@@ -22,7 +22,6 @@ class CategoriesWithQuizzesView(PrivateUserViewMixin, APIView):
         quizzes = Quiz.objects.available_to_user(user)
         categories = (
             QuizCategory.objects
-            .filter(id__in=quizzes.values_list("category", flat=True))
             .annotate(quiz_count=Count("quiz", filter=Q(quiz__in=quizzes)))
         )
         serializer = QuizCategorySerializer(categories, many=True)
