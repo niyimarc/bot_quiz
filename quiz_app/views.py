@@ -47,7 +47,7 @@ class GetAccessibleQuizzesView(PrivateUserViewMixin, ListAPIView):
                 Q(category__name__icontains=search)
             )
 
-        return queryset.distinct()
+        return queryset.distinct().order_by("-created_date")
 
 
 class ContinueSessionView(PrivateUserViewMixin, APIView):
