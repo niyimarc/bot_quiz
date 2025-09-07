@@ -209,10 +209,13 @@ class SubmitQuizAnswerView(PrivateUserViewMixin, APIView):
             feedback += "✅ Correct!"
         else:
             # Record missed question
-            session.score_obj.missed_questions.append({
+            missed = session.score_obj.missed_questions or []
+            missed = list(missed)
+            missed.append({
                 "index": session.index,
                 "question": current_question["text"]
             })
+            session.score_obj.missed_questions = missed  # reassign so Django detects the change
             feedback += f"❌ Incorrect. Correct answer: {current_question['correct']}"
 
         session.index += 1
@@ -277,7 +280,7 @@ class StartRetryView(PrivateUserViewMixin, APIView):
 
         # Convert old/new formats to 0-based indexes
         missed_indexes = [
-            i-1 if isinstance(i, int) else i["index"]-1
+            i if isinstance(i, int) else i["index"]
             for i in missed
         ]
         all_questions = get_questions_from_sheet(original_score.quiz.sheet_url)
