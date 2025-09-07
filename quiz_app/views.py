@@ -373,12 +373,22 @@ class SubmitRetryAnswerView(PrivateUserViewMixin, APIView):
             session.expecting_answer = False
             session.save()
 
+            # return message on completion
+            return Response({
+                "type": "complete",
+                "correct": is_correct,
+                "correct_answer": correct_answer,
+                "final_score": retry.score,
+                "total_questions": len(retry_questions),
+                "message": f"🎉 You completed the retry quiz!\nScore: {retry.score}/{len(retry_questions)}",
+            })
+
+        # Otherwise, return feedback for next question
         return Response({
-            "type": "feedback" if not finished else "complete",
+            "type": "feedback",
             "correct": is_correct,
             "correct_answer": correct_answer,
             "next_question_index": retry.index,
-            "finished": finished,
             "question_text": question["text"],
         })
 
