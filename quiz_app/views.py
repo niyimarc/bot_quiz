@@ -7,10 +7,10 @@ from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework import status
 from auth_core.views import PrivateUserViewMixin, PublicViewMixin
-from .serializers import QuizSerializer, QuizScoreSerializer, QuizCategorySerializer, QuizAccessSerializer
+from .serializers import QuizSerializer, QuizScoreSerializer, QuizCategorySerializer, QuizAccessSerializer, RetryableScoreSerializer
 from .models import Quiz, QuizScore, QuizSession, RetryQuizScore, RetrySession, QuizAccess, QuizCategory
 from .utils import get_questions_from_sheet, normalize, clear_participant_retry_session
-from .pagination import QuizPagination
+from .pagination import QuizPagination, RetryableScoresPagination
 from django.shortcuts import get_object_or_404
 import json
 import logging
@@ -379,28 +379,50 @@ class SubmitRetryAnswerView(PrivateUserViewMixin, APIView):
             "question_text": question["text"],
         })
 
-class RetryableScoresView(PrivateUserViewMixin, APIView):
-    def get(self, request):
-        user = request.user
-        if not user:
-            return JsonResponse({"error": "Missing user"}, status=400)
+class RetryableScoresView(PrivateUserViewMixin, ListAPIView):
+    serializer_class = RetryableScoreSerializer
+    pagination_class = RetryableScoresPagination
 
-        retryable = []
+    def get_queryset(self):
+        user = self.request.user
+        if not user:
+            return []
+
         scores = QuizScore.objects.filter(participant=user).order_by("-attempt_time")
+        retryable = []
         for score in scores:
             missed = score.missed_questions or []
-            if not missed:
-                continue
+            if missed:
+                retryable.append({
+                    "score_id": score.id,
+                    "quiz_name": score.quiz.name,
+                    "missed_count": len(missed),
+                })
+        return retryable
 
-            retryable.append({
-                "score_id": score.id,
-                "quiz_name": score.quiz.name,
-                "missed_count": len(missed),
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            paginated = self.get_paginated_response(serializer.data)
+
+            return Response({
+                "message": "📚 Quizzes with missed questions available for retry:",
+                "options": serializer.data,
+                "count": paginated.data.get("count"),
+                "next": paginated.data.get("next"),
+                "previous": paginated.data.get("previous"),
             })
 
-        return JsonResponse({
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
             "message": "📚 Quizzes with missed questions available for retry:",
-            "options": retryable
+            "options": serializer.data,
+            "count": len(serializer.data),
+            "next": None,
+            "previous": None,
         })
 
 class RetrySessionView(PrivateUserViewMixin, APIView):

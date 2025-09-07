@@ -58,3 +58,8 @@ class QuizScoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuizScore
         fields = ["id", "quiz_name", "score", "total_questions", "start_time", "end_time"]
+
+class RetryableScoreSerializer(serializers.Serializer):
+    score_id = serializers.IntegerField()
+    quiz_name = serializers.CharField()
+    missed_count = serializers.IntegerField()
