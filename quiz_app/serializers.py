@@ -14,13 +14,14 @@ class QuizSerializer(serializers.ModelSerializer):
     last_attempt_time = serializers.SerializerMethodField()
     retry_count = serializers.SerializerMethodField()
     total_questions = serializers.SerializerMethodField()
+    quiz_creator = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = [
             "id", "name", "sheet_url", "status", "is_active", "created_date",
             "category", "total_participants", "total_attempts",
-            "last_attempt_time", "retry_count", "total_questions"
+            "last_attempt_time", "retry_count", "total_questions", "quiz_creator",
         ]
 
     def get_total_participants(self, obj):
@@ -43,6 +44,9 @@ class QuizSerializer(serializers.ModelSerializer):
             return len(questions)
         except Exception:
             return 0
+        
+    def get_quiz_creator(self, obj):  # 👈 new method
+        return obj.participant.username if obj.participant else None
         
 class QuizAccessSerializer(serializers.ModelSerializer):
     participant_username = serializers.CharField(source="participant.username", read_only=True)
