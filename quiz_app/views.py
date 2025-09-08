@@ -111,7 +111,8 @@ class StartQuizView(PrivateUserViewMixin, APIView):
     def post(self, request):
         user = request.user
         quiz_id = request.data.get("quiz_id")
-
+        session_id = request.data.get("session_id")  # optional
+        
         if not quiz_id:
             return Response({"error": "quiz_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -126,6 +127,27 @@ class StartQuizView(PrivateUserViewMixin, APIView):
                 {"error": "This quiz is private and you do not have access."},
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        # If session_id provided, try to reuse existing session
+        if session_id:
+            try:
+                session = QuizSession.objects.get(id=session_id, participant=user, active=True)
+                all_questions = session.questions
+                sanitized_questions = [
+                    {"number": q["number"], "text": q["text"], "options": q["options"]}
+                    for q in all_questions
+                ]
+                return Response({
+                    "session_id": session.id,
+                    "quiz_name": quiz.name,
+                    "total_questions": len(all_questions),
+                    "questions": sanitized_questions,
+                    "current_question_index": session.index,
+                    "progress": f"Question {session.index + 1} of {len(all_questions)}",
+                })
+            except QuizSession.DoesNotExist:
+                # fallback to creating a new one
+                pass
 
         # Clean up stale retry sessions
         RetrySession.objects.filter(participant=user).update(active=False, expecting_answer=False)
@@ -162,6 +184,7 @@ class StartQuizView(PrivateUserViewMixin, APIView):
         return Response({
             "session_id": session.id,
             "quiz_name": quiz.name,
+            "current_question_index": session.index,
             "total_questions": len(all_questions),
             "questions": sanitized_questions,  # frontend will cache these
             "progress": f"Question 1 of {len(all_questions)}",
